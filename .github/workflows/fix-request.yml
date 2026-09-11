@@ -1,0 +1,231 @@
+name: Trusted FIX Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_review_run_id:
+        description: source Trusted Rail run ID
+        required: true
+        type: string
+      source_review_run_attempt:
+        description: source REVIEW artifact actual run attempt
+        required: true
+        type: string
+      source_review_artifact_name:
+        description: exact REVIEW provenance artifact name
+        required: true
+        type: string
+      fix_attempt:
+        description: bounded FIX attempt (1 or 2)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: fix-request-${{ github.repository }}-${{ inputs.source_review_run_id }}-${{ inputs.source_review_artifact_name }}-${{ inputs.fix_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  request:
+    name: trusted FIX request 생성
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      request_artifact_name: ${{ steps.request.outputs.request_artifact_name }}
+      issue_number: ${{ steps.request.outputs.issue_number }}
+      reviewed_branch: ${{ steps.request.outputs.reviewed_branch }}
+      reviewed_head_sha: ${{ steps.request.outputs.reviewed_head_sha }}
+      fix_attempt: ${{ steps.request.outputs.fix_attempt }}
+
+    steps:
+      - name: trusted control-plane exact SHA checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: source Trusted Rail 완료 및 REVIEW artifact exact 확인
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_review_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ inputs.source_review_run_attempt }}
+          SOURCE_ARTIFACT: ${{ inputs.source_review_artifact_name }}
+        with:
+          script: |
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            const reviewAttempt = Number(process.env.SOURCE_RUN_ATTEMPT);
+            const artifactName = process.env.SOURCE_ARTIFACT;
+            if (!Number.isSafeInteger(runId) || runId <= 0 ||
+                !Number.isSafeInteger(reviewAttempt) || reviewAttempt <= 0) {
+              core.setFailed('invalid source REVIEW run identity');
+              return;
+            }
+            const expected = new RegExp(
+              `^review-provenance-issue-[1-9]\\d*-${runId}-attempt-${reviewAttempt}$`,
+            );
+            if (!expected.test(artifactName)) {
+              core.setFailed(`source REVIEW artifact does not match requested identity: ${artifactName}`);
+              return;
+            }
+
+            let sourceRun = null;
+            for (let attempt = 0; attempt < 30; attempt += 1) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              });
+              sourceRun = response.data;
+              if (sourceRun.status === 'completed') break;
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+
+            const allowedEvent =
+              sourceRun?.event === 'workflow_run' || sourceRun?.event === 'workflow_dispatch';
+            if (
+              !sourceRun ||
+              sourceRun.status !== 'completed' ||
+              sourceRun.path !== '.github/workflows/trusted-rail.yml' ||
+              sourceRun.conclusion !== 'success' ||
+              !allowedEvent ||
+              sourceRun.head_branch !== context.payload.repository.default_branch ||
+              sourceRun.head_sha !== context.sha ||
+              reviewAttempt > sourceRun.run_attempt
+            ) {
+              core.setFailed(
+                `invalid source Trusted Rail: status=${sourceRun?.status}, path=${sourceRun?.path}, conclusion=${sourceRun?.conclusion}, event=${sourceRun?.event}, head=${sourceRun?.head_branch}, sha=${sourceRun?.head_sha}, attempt=${sourceRun?.run_attempt}`,
+              );
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100,
+            });
+            const matches = data.artifacts.filter(
+              (artifact) => !artifact.expired && artifact.name === artifactName,
+            );
+            if (matches.length !== 1) {
+              core.setFailed(`expected exactly one source REVIEW artifact; matches=${matches.length}`);
+            }
+
+      - name: source REVIEW provenance 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_review_artifact_name }}
+          path: ${{ runner.temp }}/review-source
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_review_run_id }}
+
+      - name: REVIEW artifact 구조 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/fix-request"
+          mapfile -t review_files < <(find "${RUNNER_TEMP}/review-source" -type f -name review.json -print)
+          mapfile -t all_files < <(find "${RUNNER_TEMP}/review-source" -type f -print)
+          if [ "${#review_files[@]}" -ne 1 ] || [ "${#all_files[@]}" -ne 1 ]; then
+            echo "REVIEW artifact must contain exactly review.json" >&2
+            exit 1
+          fi
+          cp "${review_files[0]}" "${RUNNER_TEMP}/fix-request/review.json"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted FIX request 의존성 설치
+        run: npm ci
+
+      - name: REVIEW 재검증 및 immutable FIX request 생성
+        id: request
+        run: npm exec -- tsx src/self-improvement/fix-handler.ts request
+        env:
+          REVIEW_JSON: ${{ runner.temp }}/fix-request/review.json
+          FIX_RUNTIME_DIR: ${{ runner.temp }}/fix-request
+          SOURCE_REVIEW_ARTIFACT_NAME: ${{ inputs.source_review_artifact_name }}
+          SOURCE_REVIEW_RUN_ID: ${{ inputs.source_review_run_id }}
+          SOURCE_REVIEW_RUN_ATTEMPT: ${{ inputs.source_review_run_attempt }}
+          FIX_ATTEMPT: ${{ inputs.fix_attempt }}
+
+      - name: FIX base remote HEAD exact match 재확인
+        uses: actions/github-script@v7
+        env:
+          REVIEWED_BRANCH: ${{ steps.request.outputs.reviewed_branch }}
+          REVIEWED_HEAD_SHA: ${{ steps.request.outputs.reviewed_head_sha }}
+        with:
+          script: |
+            const branch = process.env.REVIEWED_BRANCH;
+            const expected = process.env.REVIEWED_HEAD_SHA;
+            const { data } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${branch}`,
+            });
+            if (data.object.type !== 'commit' || data.object.sha !== expected) {
+              core.setFailed(`FIX base HEAD mismatch: expected=${expected}, actual=${data.object.sha}`);
+            }
+
+      - name: trusted FIX request artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.request.outputs.request_artifact_name }}
+          path: |
+            ${{ runner.temp }}/fix-request/fix-request.json
+            ${{ runner.temp }}/fix-request/review.json
+          if-no-files-found: error
+
+  dispatch_worker:
+    name: explicit untrusted FIX Worker dispatch
+    needs: request
+    if: needs.request.result == 'success'
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: exact request identity로 FIX Worker 시작
+        uses: actions/github-script@v7
+        env:
+          REQUEST_ARTIFACT: ${{ needs.request.outputs.request_artifact_name }}
+          FIX_ATTEMPT: ${{ needs.request.outputs.fix_attempt }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const artifactName = process.env.REQUEST_ARTIFACT;
+            const fixAttempt = process.env.FIX_ATTEMPT;
+            const currentRunId = Number(process.env.CURRENT_RUN_ID);
+            const currentRunAttempt = Number(process.env.CURRENT_RUN_ATTEMPT);
+            if (!Number.isSafeInteger(currentRunId) || currentRunId <= 0 ||
+                !Number.isSafeInteger(currentRunAttempt) || currentRunAttempt <= 0) {
+              core.setFailed('invalid current FIX request run identity');
+              return;
+            }
+            const expected = new RegExp(
+              `^fix-request-\\d+-fix-${fixAttempt}-${currentRunId}-attempt-${currentRunAttempt}$`,
+            );
+            if (!expected.test(artifactName)) {
+              core.setFailed(`unexpected FIX request artifact identity: ${artifactName}`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'fix-worker.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                source_fix_request_run_id: String(currentRunId),
+                source_fix_request_run_attempt: String(currentRunAttempt),
+                source_fix_request_artifact_name: artifactName,
+              },
+            });
