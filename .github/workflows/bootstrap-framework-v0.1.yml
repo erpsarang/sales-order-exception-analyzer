@@ -25,12 +25,12 @@ jobs:
           git -C /tmp/framework checkout --quiet 9457926df28a88aa8fe340ad657c52e9f4f43f70
           test "$(git -C /tmp/framework rev-parse HEAD)" = "9457926df28a88aa8fe340ad657c52e9f4f43f70"
 
-      - name: Build bootstrap branch from exact v0.1 runtime
+      - name: Build exact staging branch
         run: |
           set -euo pipefail
-          git switch -c bootstrap/framework-v0.1
+          git switch -c bootstrap/framework-v0.1-exact
 
-          mkdir -p .github src docs
+          mkdir -p .github src docs .framework-bootstrap/workflows
           cp -R /tmp/framework/.github/ISSUE_TEMPLATE .github/
           cp -R /tmp/framework/src/self-improvement src/
           cp -R /tmp/framework/policy ./policy
@@ -40,8 +40,8 @@ jobs:
           cp /tmp/framework/tsconfig.json ./tsconfig.json
           cp /tmp/framework/.gitignore ./.gitignore
           cp /tmp/framework/docs/usage.md ./docs/framework-v0.1-usage.md
+          cp /tmp/framework/.github/workflows/*.yml .framework-bootstrap/workflows/
 
-          # Keep application identity separate from the framework package identity.
           npm pkg set name=sales-order-exception-analyzer version=0.0.0 private=true
           npm install --package-lock-only --ignore-scripts
 
@@ -58,14 +58,10 @@ jobs:
           - Verification: exact published SHA.
           - LOCAL_FIX: bounded loop.
           - Final merge: Human-only. Auto Merge is prohibited.
-
-          Framework control-plane files under `.github/workflows`, `src/self-improvement`, and `policy`
-          are infrastructure. Application feature work must not modify them unless a separate trusted
-          control-plane change is explicitly authorized.
           EOF
 
           git config user.name "Trusted Framework Bootstrap"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git commit -m "Bootstrap AI Development Framework v0.1 runtime"
-          git push origin HEAD:refs/heads/bootstrap/framework-v0.1
+          git commit -m "Stage exact AI Development Framework v0.1 runtime"
+          git push origin HEAD:refs/heads/bootstrap/framework-v0.1-exact
