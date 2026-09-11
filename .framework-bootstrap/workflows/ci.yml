@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Go 설정
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: actionlint 설치
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: GitHub Actions workflow 정적 검증
+        run: >-
+          "$(go env GOPATH)/bin/actionlint"
+          -ignore 'input "permission-profile" is not defined in action "openai/codex-action@v1"'
+          -ignore 'input "allow-bot-users" is not defined in action "openai/codex-action@v1"'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: git diff --check

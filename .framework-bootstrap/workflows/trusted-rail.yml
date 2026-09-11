@@ -1,0 +1,896 @@
+name: Trusted Rail
+
+on:
+  workflow_run:
+    workflows: ["Untrusted IMPLEMENT"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_candidate_run_id:
+        description: explicit FIX Worker run ID
+        required: true
+        type: string
+      source_candidate_run_attempt:
+        description: explicit FIX Worker run attempt
+        required: true
+        type: string
+      source_candidate_artifact_name:
+        description: exact FIX candidate artifact name
+        required: true
+        type: string
+
+# Trusted Rail에 진입했다고 전체 workflow가 권한을 얻지 않는다.
+# 각 job은 필요한 최소 권한을 명시한다.
+permissions: {}
+
+jobs:
+  seal:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+       github.event.workflow_run.event == 'workflow_run') ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.candidate_artifact.outputs.should_run }}
+      source_run_id: ${{ steps.candidate_artifact.outputs.source_run_id }}
+      source_run_attempt: ${{ steps.candidate_artifact.outputs.source_run_attempt }}
+      source_control_plane_sha: ${{ steps.candidate_artifact.outputs.source_control_plane_sha }}
+      source_workflow_path: ${{ steps.candidate_artifact.outputs.source_workflow_path }}
+      source_conclusion: ${{ steps.candidate_artifact.outputs.source_conclusion }}
+
+    steps:
+      - name: candidate source 및 artifact exact 선택
+        id: candidate_artifact
+        uses: actions/github-script@v7
+        env:
+          EXPLICIT_SOURCE_RUN_ID: ${{ inputs.source_candidate_run_id }}
+          EXPLICIT_SOURCE_RUN_ATTEMPT: ${{ inputs.source_candidate_run_attempt }}
+          EXPLICIT_SOURCE_ARTIFACT: ${{ inputs.source_candidate_artifact_name }}
+        with:
+          script: |
+            const explicit = context.eventName === 'workflow_dispatch';
+            let run;
+            let requestedArtifact = null;
+
+            if (explicit) {
+              const runId = Number(process.env.EXPLICIT_SOURCE_RUN_ID);
+              const runAttempt = Number(process.env.EXPLICIT_SOURCE_RUN_ATTEMPT);
+              requestedArtifact = process.env.EXPLICIT_SOURCE_ARTIFACT;
+              if (!Number.isSafeInteger(runId) || runId <= 0 ||
+                  !Number.isSafeInteger(runAttempt) || runAttempt <= 0) {
+                core.setFailed('invalid explicit FIX source run identity');
+                return;
+              }
+              const expectedArtifact = new RegExp(
+                `^implement-candidate-\\d+-${runId}-attempt-${runAttempt}$`,
+              );
+              if (!expectedArtifact.test(requestedArtifact)) {
+                core.setFailed(`unexpected explicit FIX candidate artifact: ${requestedArtifact}`);
+                return;
+              }
+
+              for (let wait = 0; wait < 30; wait += 1) {
+                const response = await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: runId,
+                });
+                run = response.data;
+                if (run.status === 'completed') break;
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+              }
+
+              if (
+                !run ||
+                run.status !== 'completed' ||
+                run.conclusion !== 'success' ||
+                run.path !== '.github/workflows/fix-worker.yml' ||
+                run.event !== 'workflow_dispatch' ||
+                run.head_branch !== context.payload.repository.default_branch ||
+                run.head_sha !== context.sha ||
+                run.run_attempt !== runAttempt
+              ) {
+                core.setFailed(
+                  `invalid explicit FIX source: status=${run?.status}, conclusion=${run?.conclusion}, path=${run?.path}, event=${run?.event}, head=${run?.head_branch}, sha=${run?.head_sha}, attempt=${run?.run_attempt}`,
+                );
+                return;
+              }
+            } else {
+              run = context.payload.workflow_run;
+              if (run.path !== '.github/workflows/implement.yml') {
+                core.setFailed(`unexpected source workflow path: ${run.path}`);
+                return;
+              }
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+
+            const pattern = new RegExp(`^implement-candidate-(\\d+)-${run.id}-attempt-${run.run_attempt}$`);
+            const matches = data.artifacts
+              .filter((artifact) => !artifact.expired && pattern.test(artifact.name));
+
+            if (explicit) {
+              const exact = matches.filter((artifact) => artifact.name === requestedArtifact);
+              if (exact.length !== 1 || matches.length !== 1) {
+                core.setFailed(
+                  `expected exactly one explicit FIX candidate artifact; exact=${exact.length}, total=${matches.length}`,
+                );
+                return;
+              }
+              core.setOutput('name', exact[0].name);
+              core.setOutput('should_run', 'true');
+            } else if (matches.length === 1) {
+              core.setOutput('name', matches[0].name);
+              core.setOutput('should_run', 'true');
+            } else if (matches.length === 0) {
+              const { data: jobsData } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                filter: 'latest',
+                per_page: 100,
+              });
+              const implementJobs = jobsData.jobs.filter((job) => job.name === 'implement');
+              const recordJobs = jobsData.jobs.filter((job) => job.name === 'clean IMPLEMENT provenance 기록');
+
+              if (
+                implementJobs.length === 1 &&
+                implementJobs[0].conclusion === 'success' &&
+                recordJobs.length === 1 &&
+                recordJobs[0].conclusion === 'skipped'
+              ) {
+                core.info('source IMPLEMENT run was a valid no-op; SEAL is also a no-op');
+                core.setOutput('should_run', 'false');
+              } else {
+                core.setFailed(`expected exactly one candidate artifact or a valid no-op source run; matches=${matches.length}`);
+                return;
+              }
+            } else {
+              core.setFailed(`expected exactly one candidate artifact; matches=${matches.length}`);
+              return;
+            }
+
+            core.setOutput('source_run_id', String(run.id));
+            core.setOutput('source_run_attempt', String(run.run_attempt));
+            core.setOutput('source_control_plane_sha', run.head_sha);
+            core.setOutput('source_workflow_path', run.path);
+            core.setOutput('source_conclusion', run.conclusion ?? 'success');
+
+      - name: trusted control-plane exact SHA checkout
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: candidate artifact 다운로드
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.candidate_artifact.outputs.name }}
+          path: ${{ runner.temp }}/candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.candidate_artifact.outputs.source_run_id }}
+
+      - name: candidate artifact 구조 확인
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/seal"
+          mapfile -t implement_files < <(find "${RUNNER_TEMP}/candidate" -type f -name implement.json -print)
+          mapfile -t patch_files < <(find "${RUNNER_TEMP}/candidate" -type f -name candidate.patch -print)
+          mapfile -t all_files < <(find "${RUNNER_TEMP}/candidate" -type f -print)
+          if [ "${#implement_files[@]}" -ne 1 ] || [ "${#patch_files[@]}" -ne 1 ] || [ "${#all_files[@]}" -ne 2 ]; then
+            echo "candidate artifact must contain exactly candidate.patch and implement.json" >&2
+            exit 1
+          fi
+          cp "${implement_files[0]}" "${RUNNER_TEMP}/seal/implement.json"
+          cp "${patch_files[0]}" "${RUNNER_TEMP}/seal/candidate.patch"
+
+      - name: Node 설정
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted control-plane 의존성 설치
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        run: npm ci
+
+      - name: candidate 무결성 검증 및 SEAL provenance 생성
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        run: npm exec -- tsx src/self-improvement/seal-handler.ts
+        env:
+          IMPLEMENT_JSON: ${{ runner.temp }}/seal/implement.json
+          CANDIDATE_PATCH: ${{ runner.temp }}/seal/candidate.patch
+          SEALED_PATCH: ${{ runner.temp }}/seal/sealed.patch
+          SEAL_JSON: ${{ runner.temp }}/seal/seal.json
+          SOURCE_RUN_ID: ${{ steps.candidate_artifact.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.candidate_artifact.outputs.source_run_attempt }}
+          SOURCE_CONTROL_PLANE_SHA: ${{ steps.candidate_artifact.outputs.source_control_plane_sha }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_CONCLUSION: ${{ steps.candidate_artifact.outputs.source_conclusion }}
+          SOURCE_WORKFLOW_PATH: ${{ steps.candidate_artifact.outputs.source_workflow_path }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate_artifact.outputs.name }}
+          SEAL_RUN_ID: ${{ github.run_id }}
+          SEAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SEAL_TRUSTED_CODE_SHA: ${{ github.sha }}
+
+      - name: sealed artifact 저장
+        if: steps.candidate_artifact.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sealed-candidate-${{ steps.candidate_artifact.outputs.source_run_id }}-attempt-${{ steps.candidate_artifact.outputs.source_run_attempt }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/seal/sealed.patch
+            ${{ runner.temp }}/seal/seal.json
+          if-no-files-found: error
+
+  publish:
+    name: sealed artifact PUBLISH
+    needs: seal
+    if: >-
+      needs.seal.result == 'success' &&
+      needs.seal.outputs.should_run == 'true'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      published_head_sha: ${{ steps.publish.outputs.published_head_sha }}
+
+    steps:
+      - name: trusted control-plane exact SHA checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: current 또는 이전 SEAL artifact 선택
+        id: sealed_artifact
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ needs.seal.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.seal.outputs.source_run_attempt }}
+        with:
+          script: |
+            const sourceRunId = Number(process.env.SOURCE_RUN_ID);
+            const sourceRunAttempt = Number(process.env.SOURCE_RUN_ATTEMPT);
+            const trustedRunId = Number(process.env.GITHUB_RUN_ID);
+            const trustedRunAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            if (!Number.isSafeInteger(sourceRunId) || sourceRunId <= 0 ||
+                !Number.isSafeInteger(sourceRunAttempt) || sourceRunAttempt <= 0) {
+              core.setFailed('invalid source run identity');
+              return;
+            }
+            if (!Number.isSafeInteger(trustedRunId) || trustedRunId <= 0) {
+              core.setFailed('invalid trusted run id');
+              return;
+            }
+            if (!Number.isSafeInteger(trustedRunAttempt) || trustedRunAttempt <= 0) {
+              core.setFailed('invalid trusted run attempt');
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: trustedRunId,
+              per_page: 100,
+            });
+
+            const pattern = new RegExp(
+              `^sealed-candidate-${sourceRunId}-attempt-${sourceRunAttempt}-${trustedRunId}-attempt-([1-9]\\d*)$`,
+            );
+            const matches = data.artifacts
+              .filter((artifact) => !artifact.expired)
+              .map((artifact) => {
+                const match = pattern.exec(artifact.name);
+                return match ? { artifact, attempt: Number(match[1]) } : null;
+              })
+              .filter(Boolean)
+              .filter(({ attempt }) => attempt <= trustedRunAttempt);
+
+            const current = matches.filter(({ attempt }) => attempt === trustedRunAttempt);
+            if (current.length === 1) {
+              core.setOutput('name', current[0].artifact.name);
+              return;
+            }
+            if (current.length > 1) {
+              core.setFailed(`ambiguous current SEAL artifacts: ${current.length}`);
+              return;
+            }
+
+            const prior = matches
+              .filter(({ attempt }) => attempt < trustedRunAttempt)
+              .sort((left, right) => right.attempt - left.attempt);
+            if (prior.length === 0) {
+              core.setFailed('no current or prior SEAL artifact found');
+              return;
+            }
+
+            const latestAttempt = prior[0].attempt;
+            const latest = prior.filter(({ attempt }) => attempt === latestAttempt);
+            if (latest.length !== 1) {
+              core.setFailed(`ambiguous prior SEAL artifacts for attempt ${latestAttempt}: ${latest.length}`);
+              return;
+            }
+
+            core.info(`PUBLISH attempt ${trustedRunAttempt} reuses SEAL artifact from attempt ${latestAttempt}`);
+            core.setOutput('name', latest[0].artifact.name);
+
+      - name: sealed artifact 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.sealed_artifact.outputs.name }}
+          path: ${{ runner.temp }}/published-source
+
+      - name: sealed artifact 구조 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/publish"
+          mapfile -t seal_files < <(find "${RUNNER_TEMP}/published-source" -type f -name seal.json -print)
+          mapfile -t patch_files < <(find "${RUNNER_TEMP}/published-source" -type f -name sealed.patch -print)
+          mapfile -t all_files < <(find "${RUNNER_TEMP}/published-source" -type f -print)
+          if [ "${#seal_files[@]}" -ne 1 ] || [ "${#patch_files[@]}" -ne 1 ] || [ "${#all_files[@]}" -ne 2 ]; then
+            echo "sealed artifact must contain exactly sealed.patch and seal.json" >&2
+            exit 1
+          fi
+          cp "${seal_files[0]}" "${RUNNER_TEMP}/publish/seal.json"
+          cp "${patch_files[0]}" "${RUNNER_TEMP}/publish/sealed.patch"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted control-plane 의존성 설치
+        run: npm ci
+
+      - name: sealed artifact 재검증 및 PUBLISH 입력 준비
+        id: prepare
+        run: npm exec -- tsx src/self-improvement/publish-handler.ts prepare
+        env:
+          SEAL_JSON: ${{ runner.temp }}/publish/seal.json
+          SEALED_PATCH: ${{ runner.temp }}/publish/sealed.patch
+          SEALED_ARTIFACT_NAME: ${{ steps.sealed_artifact.outputs.name }}
+          PUBLISH_REPOSITORY: ${{ github.repository }}
+
+      - name: sealed patch를 publish branch에 적용 및 push
+        id: publish
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
+          ISSUE_NUMBER: ${{ steps.prepare.outputs.issue_number }}
+          PUBLISH_BRANCH: ${{ steps.prepare.outputs.publish_branch }}
+          SEALED_PATCH: ${{ runner.temp }}/publish/sealed.patch
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid base SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$PUBLISH_BRANCH" =~ ^ai-publish/issue-[1-9][0-9]*$ ]]; then
+            echo "invalid publish branch" >&2
+            exit 1
+          fi
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+
+          PUBLISH_WORKTREE="${RUNNER_TEMP}/publish-worktree"
+          cleanup() {
+            git worktree remove --force "$PUBLISH_WORKTREE" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          git worktree add --detach "$PUBLISH_WORKTREE" "$BASE_SHA"
+
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+          unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_CONFIG_COUNT || true
+
+          git -C "$PUBLISH_WORKTREE" -c core.hooksPath=/dev/null apply \
+            --index --binary --whitespace=nowarn "$SEALED_PATCH"
+
+          if git -C "$PUBLISH_WORKTREE" diff --cached --quiet; then
+            echo "sealed patch produced no staged change" >&2
+            exit 1
+          fi
+
+          CANDIDATE_TREE="$(git -C "$PUBLISH_WORKTREE" write-tree)"
+          REMOTE_REF="refs/heads/${PUBLISH_BRANCH}"
+          REMOTE_LINE="$(git ls-remote --heads origin "$REMOTE_REF")"
+          REMOTE_SHA="$(printf '%s\n' "$REMOTE_LINE" | awk 'NF {print $1}')"
+          PUBLISHED_HEAD_SHA=""
+          PUBLISH_MODE=""
+
+          if [ -n "$REMOTE_SHA" ]; then
+            if [[ ! "$REMOTE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "invalid remote publish SHA" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "$REMOTE_REF"
+            FETCHED_SHA="$(git rev-parse FETCH_HEAD)"
+            if [ "$FETCHED_SHA" != "$REMOTE_SHA" ]; then
+              echo "remote publish branch changed during validation" >&2
+              exit 1
+            fi
+
+            REMOTE_TREE="$(git rev-parse "${REMOTE_SHA}^{tree}")"
+            if [ "$REMOTE_TREE" = "$CANDIDATE_TREE" ]; then
+              REMOTE_PARENT="$(git rev-parse "${REMOTE_SHA}^")"
+              if [ "$REMOTE_PARENT" != "$BASE_SHA" ]; then
+                echo "existing publish commit has unexpected parent" >&2
+                exit 1
+              fi
+              PUBLISHED_HEAD_SHA="$REMOTE_SHA"
+              PUBLISH_MODE="reused"
+            elif [ "$REMOTE_SHA" != "$BASE_SHA" ]; then
+              echo "publish branch exists at an unexpected SHA; refusing non-fast-forward overwrite" >&2
+              exit 1
+            fi
+          fi
+
+          if [ -z "$PUBLISHED_HEAD_SHA" ]; then
+            git -C "$PUBLISH_WORKTREE" \
+              -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              -c core.hooksPath=/dev/null \
+              -c commit.gpgSign=false \
+              commit -m "PUBLISH: sealed candidate for issue #${ISSUE_NUMBER}"
+
+            PUBLISHED_HEAD_SHA="$(git -C "$PUBLISH_WORKTREE" rev-parse HEAD)"
+            git -C "$PUBLISH_WORKTREE" push origin "HEAD:${REMOTE_REF}"
+            PUBLISH_MODE="created"
+          fi
+
+          REMOTE_AFTER_LINE="$(git ls-remote --heads origin "$REMOTE_REF")"
+          REMOTE_AFTER_SHA="$(printf '%s\n' "$REMOTE_AFTER_LINE" | awk 'NF {print $1}')"
+          if [ "$REMOTE_AFTER_SHA" != "$PUBLISHED_HEAD_SHA" ]; then
+            echo "published remote SHA does not match the exact local/reused SHA" >&2
+            exit 1
+          fi
+
+          echo "published_head_sha=${PUBLISHED_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "publish_mode=${PUBLISH_MODE}" >> "$GITHUB_OUTPUT"
+
+      - name: PUBLISH provenance 생성
+        run: npm exec -- tsx src/self-improvement/publish-handler.ts finalize
+        env:
+          SEAL_JSON: ${{ runner.temp }}/publish/seal.json
+          SEALED_PATCH: ${{ runner.temp }}/publish/sealed.patch
+          SEALED_ARTIFACT_NAME: ${{ steps.sealed_artifact.outputs.name }}
+          PUBLISH_REPOSITORY: ${{ github.repository }}
+          PUBLISH_RUN_ID: ${{ github.run_id }}
+          PUBLISH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PUBLISH_TRUSTED_CODE_SHA: ${{ github.sha }}
+          PUBLISHED_HEAD_SHA: ${{ steps.publish.outputs.published_head_sha }}
+          PUBLISH_JSON: ${{ runner.temp }}/publish/publish.json
+
+      - name: PUBLISH provenance artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-provenance-issue-${{ steps.prepare.outputs.issue_number }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish/publish.json
+          if-no-files-found: error
+
+  verify_prepare:
+    name: trusted VERIFY 입력 준비
+    needs: publish
+    if: needs.publish.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      issue_number: ${{ steps.prepare_verify.outputs.issue_number }}
+      published_branch: ${{ steps.prepare_verify.outputs.published_branch }}
+      published_head_sha: ${{ steps.prepare_verify.outputs.published_head_sha }}
+      publish_artifact_name: ${{ steps.publish_artifact.outputs.name }}
+
+    steps:
+      - name: trusted VERIFY control-plane checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: current 또는 이전 PUBLISH provenance artifact 선택
+        id: publish_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const trustedRunId = Number(process.env.GITHUB_RUN_ID);
+            const trustedRunAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            if (!Number.isSafeInteger(trustedRunId) || trustedRunId <= 0) {
+              core.setFailed('invalid trusted run id');
+              return;
+            }
+            if (!Number.isSafeInteger(trustedRunAttempt) || trustedRunAttempt <= 0) {
+              core.setFailed('invalid trusted run attempt');
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: trustedRunId,
+              per_page: 100,
+            });
+
+            const pattern = new RegExp(
+              `^publish-provenance-issue-([1-9]\\d*)-${trustedRunId}-attempt-([1-9]\\d*)$`,
+            );
+            const matches = data.artifacts
+              .filter((artifact) => !artifact.expired)
+              .map((artifact) => {
+                const match = pattern.exec(artifact.name);
+                return match
+                  ? { artifact, issueNumber: Number(match[1]), attempt: Number(match[2]) }
+                  : null;
+              })
+              .filter(Boolean)
+              .filter(({ attempt }) => attempt <= trustedRunAttempt);
+
+            const current = matches.filter(({ attempt }) => attempt === trustedRunAttempt);
+            if (current.length === 1) {
+              core.setOutput('name', current[0].artifact.name);
+              return;
+            }
+            if (current.length > 1) {
+              core.setFailed(`ambiguous current PUBLISH artifacts: ${current.length}`);
+              return;
+            }
+
+            const prior = matches
+              .filter(({ attempt }) => attempt < trustedRunAttempt)
+              .sort((left, right) => right.attempt - left.attempt);
+            if (prior.length === 0) {
+              core.setFailed('no current or prior PUBLISH provenance artifact found');
+              return;
+            }
+
+            const latestAttempt = prior[0].attempt;
+            const latest = prior.filter(({ attempt }) => attempt === latestAttempt);
+            if (latest.length !== 1) {
+              core.setFailed(`ambiguous prior PUBLISH artifacts for attempt ${latestAttempt}`);
+              return;
+            }
+
+            core.info(`VERIFY attempt ${trustedRunAttempt} reuses PUBLISH artifact from attempt ${latestAttempt}`);
+            core.setOutput('name', latest[0].artifact.name);
+
+      - name: PUBLISH provenance artifact 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.publish_artifact.outputs.name }}
+          path: ${{ runner.temp }}/verify-source
+
+      - name: PUBLISH provenance artifact 구조 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/verify"
+          mapfile -t publish_files < <(find "${RUNNER_TEMP}/verify-source" -type f -name publish.json -print)
+          mapfile -t all_files < <(find "${RUNNER_TEMP}/verify-source" -type f -print)
+          if [ "${#publish_files[@]}" -ne 1 ] || [ "${#all_files[@]}" -ne 1 ]; then
+            echo "PUBLISH provenance artifact must contain exactly publish.json" >&2
+            exit 1
+          fi
+          cp "${publish_files[0]}" "${RUNNER_TEMP}/verify/publish.json"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted VERIFY control-plane 의존성 설치
+        run: npm ci
+
+      - name: PUBLISH provenance 재검증 및 VERIFY 입력 준비
+        id: prepare_verify
+        run: npm exec -- tsx src/self-improvement/verify-handler.ts prepare
+        env:
+          PUBLISH_JSON: ${{ runner.temp }}/verify/publish.json
+          PUBLISH_ARTIFACT_NAME: ${{ steps.publish_artifact.outputs.name }}
+          VERIFY_REPOSITORY: ${{ github.repository }}
+
+      - name: remote publish HEAD exact match 확인
+        uses: actions/github-script@v7
+        env:
+          PUBLISHED_BRANCH: ${{ steps.prepare_verify.outputs.published_branch }}
+          PUBLISHED_HEAD_SHA: ${{ steps.prepare_verify.outputs.published_head_sha }}
+        with:
+          script: |
+            const branch = process.env.PUBLISHED_BRANCH;
+            const expected = process.env.PUBLISHED_HEAD_SHA;
+            const { data } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${branch}`,
+            });
+            if (data.object.type !== 'commit' || data.object.sha !== expected) {
+              core.setFailed(`remote publish HEAD mismatch: expected=${expected}, actual=${data.object.sha}`);
+            }
+
+  verify_candidate:
+    name: isolated candidate exact-SHA verification
+    needs: verify_prepare
+    if: needs.verify_prepare.result == 'success'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ""
+      GH_TOKEN: ""
+      NODE_AUTH_TOKEN: ""
+      NPM_TOKEN: ""
+
+    steps:
+      - name: exact published SHA checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify_prepare.outputs.published_head_sha }}
+          path: verified-target
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: exact checkout SHA 확인
+        shell: bash
+        working-directory: verified-target
+        env:
+          EXPECTED_SHA: ${{ needs.verify_prepare.outputs.published_head_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "exact checkout SHA mismatch" >&2
+            exit 1
+          fi
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: verified-target/package-lock.json
+
+      - name: published candidate 의존성 설치
+        working-directory: verified-target
+        run: npm ci
+
+      - name: published candidate 테스트
+        working-directory: verified-target
+        run: npm test
+
+      - name: published candidate 빌드
+        working-directory: verified-target
+        run: npm run build
+
+      - name: published commit diff whitespace 검증
+        working-directory: verified-target
+        run: git show --check --format= HEAD
+
+  verify_finalize:
+    name: trusted VERIFY provenance 기록
+    needs: [verify_prepare, verify_candidate]
+    if: >-
+      needs.verify_prepare.result == 'success' &&
+      needs.verify_candidate.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: trusted VERIFY control-plane checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: current 또는 이전 PUBLISH provenance artifact 재선택
+        id: publish_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const trustedRunId = Number(process.env.GITHUB_RUN_ID);
+            const trustedRunAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            if (!Number.isSafeInteger(trustedRunId) || trustedRunId <= 0) {
+              core.setFailed('invalid trusted run id');
+              return;
+            }
+            if (!Number.isSafeInteger(trustedRunAttempt) || trustedRunAttempt <= 0) {
+              core.setFailed('invalid trusted run attempt');
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: trustedRunId,
+              per_page: 100,
+            });
+
+            const pattern = new RegExp(
+              `^publish-provenance-issue-([1-9]\\d*)-${trustedRunId}-attempt-([1-9]\\d*)$`,
+            );
+            const matches = data.artifacts
+              .filter((artifact) => !artifact.expired)
+              .map((artifact) => {
+                const match = pattern.exec(artifact.name);
+                return match
+                  ? { artifact, issueNumber: Number(match[1]), attempt: Number(match[2]) }
+                  : null;
+              })
+              .filter(Boolean)
+              .filter(({ attempt }) => attempt <= trustedRunAttempt);
+
+            const current = matches.filter(({ attempt }) => attempt === trustedRunAttempt);
+            if (current.length === 1) {
+              core.setOutput('name', current[0].artifact.name);
+              return;
+            }
+            if (current.length > 1) {
+              core.setFailed(`ambiguous current PUBLISH artifacts: ${current.length}`);
+              return;
+            }
+
+            const prior = matches
+              .filter(({ attempt }) => attempt < trustedRunAttempt)
+              .sort((left, right) => right.attempt - left.attempt);
+            if (prior.length === 0) {
+              core.setFailed('no current or prior PUBLISH provenance artifact found');
+              return;
+            }
+
+            const latestAttempt = prior[0].attempt;
+            const latest = prior.filter(({ attempt }) => attempt === latestAttempt);
+            if (latest.length !== 1) {
+              core.setFailed(`ambiguous prior PUBLISH artifacts for attempt ${latestAttempt}`);
+              return;
+            }
+
+            core.info(`VERIFY finalize attempt ${trustedRunAttempt} reuses PUBLISH artifact from attempt ${latestAttempt}`);
+            core.setOutput('name', latest[0].artifact.name);
+
+      - name: prepare와 동일 PUBLISH artifact인지 확인
+        shell: bash
+        env:
+          PREPARED_ARTIFACT: ${{ needs.verify_prepare.outputs.publish_artifact_name }}
+          FINALIZE_ARTIFACT: ${{ steps.publish_artifact.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [ "$FINALIZE_ARTIFACT" != "$PREPARED_ARTIFACT" ]; then
+            echo "PUBLISH provenance artifact changed between VERIFY prepare and finalize" >&2
+            exit 1
+          fi
+
+      - name: PUBLISH provenance artifact 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.publish_artifact.outputs.name }}
+          path: ${{ runner.temp }}/verify-source
+
+      - name: PUBLISH provenance artifact 구조 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/verify"
+          mapfile -t publish_files < <(find "${RUNNER_TEMP}/verify-source" -type f -name publish.json -print)
+          mapfile -t all_files < <(find "${RUNNER_TEMP}/verify-source" -type f -print)
+          if [ "${#publish_files[@]}" -ne 1 ] || [ "${#all_files[@]}" -ne 1 ]; then
+            echo "PUBLISH provenance artifact must contain exactly publish.json" >&2
+            exit 1
+          fi
+          cp "${publish_files[0]}" "${RUNNER_TEMP}/verify/publish.json"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted VERIFY control-plane 의존성 설치
+        run: npm ci
+
+      - name: PUBLISH provenance 재검증
+        id: revalidate_verify
+        run: npm exec -- tsx src/self-improvement/verify-handler.ts prepare
+        env:
+          PUBLISH_JSON: ${{ runner.temp }}/verify/publish.json
+          PUBLISH_ARTIFACT_NAME: ${{ steps.publish_artifact.outputs.name }}
+          VERIFY_REPOSITORY: ${{ github.repository }}
+
+      - name: prepare와 finalize identity exact match 확인
+        shell: bash
+        env:
+          EXPECTED_ISSUE: ${{ needs.verify_prepare.outputs.issue_number }}
+          EXPECTED_BRANCH: ${{ needs.verify_prepare.outputs.published_branch }}
+          EXPECTED_SHA: ${{ needs.verify_prepare.outputs.published_head_sha }}
+          ACTUAL_ISSUE: ${{ steps.revalidate_verify.outputs.issue_number }}
+          ACTUAL_BRANCH: ${{ steps.revalidate_verify.outputs.published_branch }}
+          ACTUAL_SHA: ${{ steps.revalidate_verify.outputs.published_head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTUAL_ISSUE" != "$EXPECTED_ISSUE" ] || \
+             [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ] || \
+             [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "VERIFY provenance identity changed between prepare and finalize" >&2
+            exit 1
+          fi
+
+      - name: 검증 종료 시 remote publish HEAD 재확인
+        uses: actions/github-script@v7
+        env:
+          PUBLISHED_BRANCH: ${{ steps.revalidate_verify.outputs.published_branch }}
+          PUBLISHED_HEAD_SHA: ${{ steps.revalidate_verify.outputs.published_head_sha }}
+        with:
+          script: |
+            const branch = process.env.PUBLISHED_BRANCH;
+            const expected = process.env.PUBLISHED_HEAD_SHA;
+            const { data } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${branch}`,
+            });
+            if (data.object.type !== 'commit' || data.object.sha !== expected) {
+              core.setFailed(`remote publish HEAD moved during isolated VERIFY: expected=${expected}, actual=${data.object.sha}`);
+            }
+
+      - name: VERIFY provenance 생성
+        run: npm exec -- tsx src/self-improvement/verify-handler.ts finalize
+        env:
+          PUBLISH_JSON: ${{ runner.temp }}/verify/publish.json
+          PUBLISH_ARTIFACT_NAME: ${{ steps.publish_artifact.outputs.name }}
+          VERIFY_REPOSITORY: ${{ github.repository }}
+          VERIFY_RUN_ID: ${{ github.run_id }}
+          VERIFY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          VERIFY_TRUSTED_CODE_SHA: ${{ github.sha }}
+          VERIFIED_HEAD_SHA: ${{ steps.revalidate_verify.outputs.published_head_sha }}
+          VERIFY_JSON: ${{ runner.temp }}/verify/verify.json
+
+      - name: VERIFY provenance artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-provenance-issue-${{ steps.revalidate_verify.outputs.issue_number }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verify/verify.json
+          if-no-files-found: error
+
+  review:
+    name: Semantic REVIEW
+    needs: verify_finalize
+    if: needs.verify_finalize.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/semantic-review.yml
+    secrets: inherit
+
+  orchestrate:
+    name: Embedded Orchestrator / same-run Control Plane
+    needs: review
+    if: needs.review.result == 'success'
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    uses: ./.github/workflows/orchestrator.yml
