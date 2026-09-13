@@ -1,4 +1,4 @@
-name: Framework v0.2 exact bootstrap
+name: Framework v0.2 non-workflow bootstrap
 
 on:
   push:
@@ -30,15 +30,13 @@ jobs:
           path: .framework-source
           persist-credentials: false
 
-      - name: Copy canonical v0.2 allowlist only
+      - name: Copy canonical v0.2 non-workflow allowlist only
         shell: bash
         run: |
           set -euo pipefail
           SOURCE=.framework-source
-          workflows=(orchestrator.yml plan-authorize.yml plan-candidate-bridge.yml plan-implement-handoff.yml plan-implement-worker.yml plan.yml semantic-review.yml trusted-rail.yml)
           sources=(context-pack.ts deterministic-ci.ts fix.ts human-status.ts implement-contract.ts orchestrator.ts plan-authorization.ts plan-authorize-handler.ts plan-candidate-bridge-handler.ts plan-candidate-bridge.ts plan-human-output-context.ts plan-implement-handoff-handler.ts plan-implement-handoff.ts plan-implement-worker-handler.ts plan-implement-worker.ts planner-handler.ts planner.ts review-handler.ts review.ts seal-handler.ts seal.ts single-pass-worker.ts)
           tests=(context-pack.test.ts deterministic-ci.test.ts fix-dispatch-workflow.test.ts human-status-output.test.ts human-status.test.ts implement-contract.test.ts plan-authorization.test.ts plan-authorize-workflow.test.ts plan-candidate-bridge-workflow.test.ts plan-candidate-bridge.test.ts plan-implement-handoff-workflow.test.ts plan-implement-handoff.test.ts plan-implement-worker-workflow.test.ts plan-implement-worker.test.ts plan-provenance.test.ts plan-trusted-rail-bridge.test.ts planner-anchor-context.test.ts planner-human-output-context.test.ts planner.test.ts publish-workflow.test.ts seal-workflow.test.ts single-pass-worker.test.ts)
-          for f in "${workflows[@]}"; do cp "$SOURCE/.github/workflows/$f" ".github/workflows/$f"; done
           for f in "${sources[@]}"; do cp "$SOURCE/src/self-improvement/$f" "src/self-improvement/$f"; done
           for f in "${tests[@]}"; do cp "$SOURCE/test/$f" "test/$f"; done
           cat > FRAMEWORK.md <<'EOF'
@@ -56,20 +54,19 @@ jobs:
           EOF
           sed -i 's/^          //' FRAMEWORK.md
           rm -rf .framework-source
-          rm -f .github/workflows/framework-v02-bootstrap.yml
 
-      - name: Validate no product surface changed
+      - name: Validate no product or workflow surface changed
         shell: bash
         run: |
           set -euo pipefail
           while IFS= read -r path; do
             case "$path" in
-              FRAMEWORK.md|.github/workflows/*|src/self-improvement/*|test/*) ;;
+              FRAMEWORK.md|src/self-improvement/*|test/*) ;;
               *) echo "unexpected bootstrap path: $path" >&2; exit 1 ;;
             esac
             case "$path" in
-              src/order-analysis.ts|src/batch-order-analysis.ts|test/order-analysis.test.ts|test/batch-order-analysis.test.ts|README.md)
-                echo "product surface changed: $path" >&2
+              src/order-analysis.ts|src/batch-order-analysis.ts|test/order-analysis.test.ts|test/batch-order-analysis.test.ts|README.md|.github/workflows/*)
+                echo "protected surface changed: $path" >&2
                 exit 1
                 ;;
             esac
@@ -87,14 +84,14 @@ jobs:
       - name: Full regression
         run: npm test
 
-      - name: Commit exact snapshot
+      - name: Commit exact non-workflow snapshot
         shell: bash
         run: |
           set -euo pipefail
-          git add .github/workflows src/self-improvement test FRAMEWORK.md
+          git add src/self-improvement test FRAMEWORK.md
           if git diff --cached --quiet; then
             echo 'bootstrap produced no change' >&2
             exit 1
           fi
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'chore: upgrade framework canonical runtime to v0.2 (#9)'
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'chore: upgrade framework non-workflow runtime to v0.2 (#9)'
           git push origin HEAD:chatgpt/framework-v0.2-upgrade
