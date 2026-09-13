@@ -1,4 +1,5 @@
 name: Framework v0.2 non-workflow bootstrap
+# rerun after canonical v0.2 workflow snapshot installation
 
 on:
   push:
