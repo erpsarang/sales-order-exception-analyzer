@@ -4,7 +4,18 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { assertOutsideTarget, snapshot, validatePlan, createPlanPrompt } from "../src/self-improvement/planner.js";
+import {
+  assertOutsideTarget,
+  createPlanPrompt,
+  PLAN_CONTEXT_MAX_BYTES,
+  PLAN_CONTEXT_MAX_FILES,
+  PLAN_SCHEMA,
+  selectPlanContext,
+  snapshot,
+  validatePlan,
+  verifyPlanContextPack,
+  type PlanContextPack,
+} from "../src/self-improvement/planner.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "planner-test-"));
@@ -14,47 +25,163 @@ function fixture() {
   writeFileSync(join(target, "orders.ts"), "export const orders = [];\n");
   writeFileSync(join(target, "orders.test.ts"), "assert.deepEqual(orders, []);\n");
   writeFileSync(join(target, "README.md"), "Order list\n");
-  const plan = {
-    summary: "고객 이름으로 주문 검색", analysis: [
-      { path: "orders.ts", quote: "export const orders = [];", finding: "주문 목록에 고객 검색 조건이 필요합니다." },
-      { path: "orders.test.ts", quote: "assert.deepEqual(orders, []);", finding: "빈 결과 테스트를 유지합니다." },
-      { path: "README.md", quote: "Order list", finding: "검색 사용법을 문서화합니다." },
-    ], approach: ["고객 이름 필터 추가"], changeCandidates: ["orders.ts: 필터 추가"],
-    acceptanceCriteria: ["김민수 검색 시 해당 고객 주문만 표시"], testStrategy: ["빈 검색과 고객 일치 테스트 추가"], questions: [],
-  };
-  return { root, target, output, plan };
+  return { root, target, output };
 }
 
-test("business requirement produces artifacts outside unchanged target with repository evidence", () => {
+function planFor(context: PlanContextPack) {
+  const allowedPath = context.files[0]!.path;
+  return {
+    summary: "고객 이름으로 주문 검색",
+    analysis: context.files.slice(0, Math.min(2, context.files.length)).map((file, index) => ({
+      evidenceId: file.evidenceId,
+      finding: index === 0 ? "주문 검색 동작을 변경할 후보입니다." : "관련 테스트 또는 문서를 함께 확인해야 합니다.",
+    })),
+    approach: ["고객 이름 필터 추가"],
+    changeCandidates: [`${allowedPath} 변경`],
+    acceptanceCriteria: ["김민수 검색 시 해당 고객 주문만 표시"],
+    testStrategy: ["빈 검색과 고객 일치 테스트 추가"],
+    questions: [],
+    implementationScope: {
+      ready: true,
+      allowedPaths: [allowedPath],
+      requiredChanges: ["고객 이름 필터를 추가한다"],
+      forbiddenChanges: ["승인 또는 병합 경계를 변경하지 않는다"],
+      validationCommands: ["npm test"],
+    },
+  };
+}
+
+test("business requirement produces bounded PLAN artifacts with trusted evidence IDs and exact implementation scope", () => {
   const f = fixture();
   try {
     const before = snapshot(f.target);
     const requirement = join(f.output, "requirement.md");
-    writeFileSync(requirement, "고객 이름으로 주문을 찾고 싶어요.");
+    writeFileSync(requirement, "고객 이름으로 orders 주문을 찾고 싶어요.");
     const run = (command: string) => spawnSync(process.execPath, ["--import", "tsx", resolve("src/self-improvement/planner-handler.ts"), command], {
       env: { ...process.env, PLAN_TARGET: f.target, PLAN_OUTPUT: f.output, PLAN_REQUIREMENT: requirement, PLAN_REPOSITORY: "example/orders", PLAN_SHA: "a".repeat(40) }, encoding: "utf8",
     });
     const prepared = run("prepare");
     assert.equal(prepared.status, 0, prepared.stderr);
-    assert.match(readFileSync(join(f.output, "prompt.md"), "utf8"), /고객 이름/);
-    writeFileSync(join(f.output, "raw-plan.json"), JSON.stringify(f.plan));
+    const prompt = readFileSync(join(f.output, "prompt.md"), "utf8");
+    assert.match(prompt, /고객 이름/);
+    assert.match(prompt, /bounded PLAN/);
+    assert.match(prompt, /evidenceId/);
+    assert.match(prompt, /implementationScope/);
+    assert.match(prompt, /path나 원문 quote를 직접 작성하지 마세요/);
+    const context = JSON.parse(readFileSync(join(f.output, "PLAN-context.json"), "utf8")) as PlanContextPack;
+    assert.doesNotThrow(() => verifyPlanContextPack(context));
+    assert.ok(context.files.length <= PLAN_CONTEXT_MAX_FILES);
+    assert.ok(context.totalBytes <= PLAN_CONTEXT_MAX_BYTES);
+    assert.deepEqual(context.files.map((file) => file.evidenceId), context.files.map((_, index) => `E${index + 1}`));
+
+    writeFileSync(join(f.output, "raw-plan.json"), JSON.stringify(planFor(context)));
     const result = run("artifact");
     assert.equal(result.status, 0, result.stderr);
-    assert.match(readFileSync(join(f.output, "PLAN.md"), "utf8"), /테스트 전략/);
+    const planArtifact = JSON.parse(readFileSync(join(f.output, "PLAN.json"), "utf8"));
+    assert.equal(planArtifact.plan.analysis[0].evidenceId, context.files[0]!.evidenceId);
+    assert.equal(planArtifact.plan.analysis[0].path, context.files[0]!.path);
+    assert.equal(planArtifact.plan.analysis[0].contentDigest, context.files[0]!.contentDigest);
+    assert.equal(planArtifact.plan.implementationScope.ready, true);
+    assert.deepEqual(planArtifact.plan.implementationScope.allowedPaths, [context.files[0]!.path]);
+    const markdown = readFileSync(join(f.output, "PLAN.md"), "utf8");
+    assert.match(markdown, /\[E1\]/);
+    assert.match(markdown, /IMPLEMENT 가능/);
     assert.deepEqual(snapshot(f.target), before);
     writeFileSync(join(f.target, "orders.ts"), "modified");
     assert.notEqual(run("artifact").status, 0);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("rejects invented evidence, missing strategies, empty requirements and target output paths", () => {
+test("deterministic Context Pack binds PLAN analysis to evidence IDs only", () => {
   const f = fixture();
   try {
-    const files = snapshot(f.target);
-    assert.throws(() => validatePlan({ ...f.plan, analysis: [{ path: "../outside", quote: "x", finding: "x" }] }, f.target, files));
-    assert.throws(() => validatePlan({ ...f.plan, analysis: [{ path: "orders.ts", quote: "invented", finding: "x" }] }, f.target, files));
-    assert.throws(() => validatePlan({ ...f.plan, testStrategy: [] }, f.target, files));
-    assert.throws(() => createPlanPrompt("  ", f.target));
+    writeFileSync(join(f.target, "unrelated.ts"), "export const unrelated = true;\n".repeat(1000));
+    const requirement = "orders 주문 필터를 설계한다";
+    const first = selectPlanContext(requirement, f.target, "example/orders", "b".repeat(40), { maxFiles: 2, maxBytes: 5000, maxFileBytes: 3000 });
+    const second = selectPlanContext(requirement, f.target, "example/orders", "b".repeat(40), { maxFiles: 2, maxBytes: 5000, maxFileBytes: 3000 });
+    assert.deepEqual(first, second);
+    assert.ok(first.files.length <= 2);
+    assert.ok(first.totalBytes <= 5000);
+    assert.deepEqual(first.files.map((file) => file.evidenceId), first.files.map((_, index) => `E${index + 1}`));
+    assert.doesNotThrow(() => verifyPlanContextPack(first));
+    assert.match(createPlanPrompt(requirement, first), /Trusted Context Pack/);
+
+    const minimal = planFor(first);
+    const normalized = validatePlan(minimal, f.target, first);
+    const analysis = normalized.analysis as Array<{ evidenceId: string; path: string; contentDigest: string; finding: string }>;
+    assert.equal(analysis[0]!.path, first.files[0]!.path);
+    assert.equal(analysis[0]!.contentDigest, first.files[0]!.contentDigest);
+    assert.throws(() => validatePlan({ ...minimal, analysis: [{ evidenceId: "E999", finding: "근거" }] }, f.target, first), /outside bounded PLAN context/);
+    assert.throws(() => validatePlan({ ...minimal, analysis: [minimal.analysis[0], minimal.analysis[0]] }, f.target, first), /Duplicate PLAN evidence ID/);
+
+    const tampered = JSON.parse(JSON.stringify(first)) as any;
+    tampered.files[0].evidenceId = "E2";
+    assert.throws(() => verifyPlanContextPack(tampered), /evidence identity/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("implementation scope is fail-closed and cannot authorize unseen existing paths", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.target, "hidden.ts"), "export const hidden = true;\n");
+    const context = selectPlanContext("orders 주문", f.target, "example/orders", "c".repeat(40), { maxFiles: 1 });
+    const valid = planFor(context);
+
+    assert.throws(() => validatePlan({
+      ...valid,
+      implementationScope: { ...valid.implementationScope, allowedPaths: ["hidden.ts"] },
+    }, f.target, context), /outside bounded PLAN context/);
+    assert.throws(() => validatePlan({
+      ...valid,
+      implementationScope: { ...valid.implementationScope, allowedPaths: ["../escape.ts"] },
+    }, f.target, context), /Unsafe implementation scope path/);
+    assert.throws(() => validatePlan({
+      ...valid,
+      implementationScope: { ...valid.implementationScope, validationCommands: ["npm exec dangerous"] },
+    }, f.target, context), /Untrusted validation command/);
+    assert.throws(() => validatePlan({ ...valid, questions: ["확인 필요"] }, f.target, context), /requires no blocking questions/);
+
+    const paused = {
+      ...valid,
+      questions: ["정확한 출력 지점을 확인해야 합니다."],
+      implementationScope: { ready: false, allowedPaths: [], requiredChanges: [], forbiddenChanges: [], validationCommands: [] },
+    };
+    const normalizedPaused = validatePlan(paused, f.target, context);
+    assert.equal((normalizedPaused.implementationScope as { ready: boolean }).ready, false);
+    assert.throws(() => validatePlan({
+      ...paused,
+      implementationScope: { ...paused.implementationScope, allowedPaths: ["new.ts"] },
+    }, f.target, context), /must be empty when ready=false/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("Context Pack deterministically reserves relevant source/test context before documentation", () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.target, "src"));
+    mkdirSync(join(f.target, "test"));
+    mkdirSync(join(f.target, "docs"));
+    writeFileSync(join(f.target, "src", "state.ts"), "export const MERGE_READY = 'MERGE_READY';\n");
+    writeFileSync(join(f.target, "test", "state.test.ts"), "// MERGE_READY state test\n");
+    writeFileSync(join(f.target, "docs", "states.md"), "MERGE_READY ".repeat(100));
+    writeFileSync(join(f.target, "package.json"), '{"scripts":{"test":"node --test"}}\n');
+    const context = selectPlanContext("MERGE_READY 상태를 표시한다", f.target, "example/orders", "d".repeat(40), { maxFiles: 4, maxBytes: 20_000 });
+    const paths = context.files.map((file) => file.path);
+    assert.ok(paths.some((path) => path.startsWith("src/") || path.startsWith("test/")));
+    assert.ok(paths.includes("package.json"));
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("rejects free-form quote/path evidence, missing strategies, empty requirements and target output paths", () => {
+  const f = fixture();
+  try {
+    const context = selectPlanContext("orders 주문", f.target, "example/orders", "e".repeat(40));
+    const valid = planFor(context);
+    const evidenceId = context.files[0]!.evidenceId;
+    assert.throws(() => validatePlan({ ...valid, analysis: [{ evidenceId, finding: "근거", quote: "invented" }] }, f.target, context), /Invalid analysis evidence fields/);
+    assert.throws(() => validatePlan({ ...valid, analysis: [{ path: context.files[0]!.path, quote: "invented", finding: "x" }] }, f.target, context), /Invalid analysis evidence fields/);
+    assert.throws(() => validatePlan({ ...valid, testStrategy: [] }, f.target, context));
+    assert.throws(() => selectPlanContext("  ", f.target, "example/orders", "f".repeat(40)));
     assert.throws(() => assertOutsideTarget(f.target, f.target));
     mkdirSync(join(f.target, "nested"));
     assert.throws(() => assertOutsideTarget(f.target, join(f.target, "nested")));
@@ -62,15 +189,28 @@ test("rejects invented evidence, missing strategies, empty requirements and targ
     assert.throws(() => assertOutsideTarget(f.target, join(f.root, "alias")));
     symlinkSync(f.output, join(f.target, "escape"));
     assert.throws(() => snapshot(f.target), /Unsupported/);
+
+    const schemaText = JSON.stringify(PLAN_SCHEMA.properties.analysis);
+    assert.match(schemaText, /evidenceId/);
+    assert.doesNotMatch(schemaText, /quote/);
+    assert.doesNotMatch(schemaText, /"path"/);
+    assert.match(JSON.stringify(PLAN_SCHEMA.properties.implementationScope), /allowedPaths/);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("PLAN workflow is standalone and enforces read-only execution", () => {
+test("PLAN workflow removes repositories before bounded read-only AI execution", () => {
   const workflow = readFileSync(".github/workflows/plan.yml", "utf8");
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /timeout-minutes: 5/);
+  assert.match(workflow, /Remove repository checkouts before AI/);
+  assert.match(workflow, /rm -rf planner-control plan-target/);
+  assert.match(workflow, /Read-only bounded AI Planner[\s\S]*timeout-minutes: 3/);
   assert.match(workflow, /permission-profile: ":read-only"/);
   assert.match(workflow, /safety-strategy: drop-sudo/);
-  assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 2);
-  assert.doesNotMatch(workflow, /(?:contents|issues|pull-requests): write|workflow_run:|workflow_call:|git (?:commit|push|checkout -b)|trusted-rail/);
-  assert.match(workflow, /runner.temp.*ai-plan\/PLAN.md/);
+  assert.match(workflow, /effort: medium/);
+  assert.doesNotMatch(workflow, /effort: high/);
+  assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 4);
+  assert.match(workflow, /Fresh Target checkout at frozen SHA for validation/);
+  assert.doesNotMatch(workflow.split("  provenance:")[0]!, /(?:contents|issues|pull-requests): write|workflow_run:|workflow_call:|git (?:commit|push|checkout -b)|trusted-rail/);
+  assert.match(workflow, /runner.temp.*ai-plan\/PLAN-context.json/);
 });

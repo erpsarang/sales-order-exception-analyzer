@@ -1,12 +1,11 @@
 # AI Development Framework
 
-This repository is bootstrapped with AI Development Framework MVP v0.1.
+This repository is bootstrapped with AI Development Framework MVP v0.2 canonical PLAN runtime.
 
 - Source repository: `erpsarang/self-improvement-mvp`
-- Framework tag: `v0.1`
-- Framework source SHA: `9457926df28a88aa8fe340ad657c52e9f4f43f70`
+- Framework line: `v0.2`
+- Framework source SHA: `ee4f9d39688436c6da944a5e93118d9b1f16a4de`
+- Canonical path: User Requirement → Read-only AI PLAN → Human `PLAN-승인` → PLAN_AUTHORIZE → ImplementContract + Context Pack → bounded untrusted Worker → deterministic CI → PLAN Bridge → SEAL → PUBLISH → VERIFY → Semantic REVIEW → bounded LOCAL_FIX if required → MERGE_READY → Human Merge.
 - Trust model: IMPLEMENT/FIX workers are untrusted; worker output is a candidate artifact.
-- Trusted Rail: SEAL → PUBLISH → VERIFY → Semantic REVIEW.
-- Verification: exact published SHA.
-- LOCAL_FIX: bounded loop.
+- Trusted Rail: exact-SHA/provenance validation is preserved.
 - Final merge: Human-only. Auto Merge is prohibited.
