@@ -51,6 +51,12 @@ export interface PlanCandidateWorkerSourceRun {
   readonly currentDefaultSha: string;
 }
 
+export interface TrustedRecoveryCompareGuard {
+  readonly kind: "trusted-recovery-compare-v1";
+  readonly baseSha: string;
+  readonly currentDefaultSha: string;
+}
+
 export interface FrozenPlanRequirement {
   readonly issueNumber: number;
   readonly title: string;
@@ -94,6 +100,7 @@ export interface PlanCandidateBridgePayload {
   readonly candidateDigest: string;
   readonly deterministicValidation: DeterministicValidationResult;
   readonly candidatePatchDigest: string;
+  readonly recoveryGuard?: TrustedRecoveryCompareGuard;
   readonly bridgeWorkflow: {
     readonly workflowPath: typeof PLAN_CANDIDATE_BRIDGE_WORKFLOW_PATH;
     readonly runId: number;
@@ -146,6 +153,33 @@ function sha256(value: string | Buffer): string {
 
 function sha256Prefixed(value: string | Buffer): string {
   return `sha256:${sha256(value)}`;
+}
+
+export function validateBridgeTrustedCodeIdentity(input: {
+  readonly baseSha: string;
+  readonly trustedCodeSha: string;
+  readonly recoveryGuard?: TrustedRecoveryCompareGuard;
+}): void {
+  assertSha("bridge base SHA", input.baseSha);
+  assertSha("bridge trusted code SHA", input.trustedCodeSha);
+  if (!input.recoveryGuard) {
+    if (input.trustedCodeSha !== input.baseSha) {
+      throw new Error("bridge trusted code SHA must equal exact candidate base SHA");
+    }
+    return;
+  }
+
+  if (input.recoveryGuard.kind !== "trusted-recovery-compare-v1") {
+    throw new Error("bridge recovery guard kind mismatch");
+  }
+  assertSha("bridge recovery base SHA", input.recoveryGuard.baseSha);
+  assertSha("bridge recovery current default SHA", input.recoveryGuard.currentDefaultSha);
+  if (
+    input.recoveryGuard.baseSha !== input.baseSha ||
+    input.recoveryGuard.currentDefaultSha !== input.trustedCodeSha
+  ) {
+    throw new Error("bridge recovery guard does not bind candidate base and trusted code SHA");
+  }
 }
 
 function workerPayload(value: WorkerCandidateProvenance): Omit<WorkerCandidateProvenance, "digestAlgorithm" | "provenanceDigest"> {
@@ -215,6 +249,7 @@ export function validatePlanCandidateWorkerSource(
   provenance: WorkerCandidateProvenance,
   source: PlanCandidateWorkerSourceRun,
   sourceArtifact: ArtifactMetadata,
+  recoveryGuard?: TrustedRecoveryCompareGuard,
 ): void {
   positiveInteger("Worker source run id", source.id);
   positiveInteger("Worker source run attempt", source.runAttempt);
@@ -233,7 +268,15 @@ export function validatePlanCandidateWorkerSource(
     throw new Error("Worker source run identity mismatch");
   }
   if (source.headSha !== provenance.baseSha) throw new Error("Worker source head SHA mismatch");
-  if (source.currentDefaultSha !== provenance.baseSha) throw new Error("default branch moved after Worker; re-plan required");
+  if (source.currentDefaultSha !== provenance.baseSha) {
+    if (
+      recoveryGuard?.kind !== "trusted-recovery-compare-v1" ||
+      recoveryGuard.baseSha !== provenance.baseSha ||
+      recoveryGuard.currentDefaultSha !== source.currentDefaultSha
+    ) {
+      throw new Error("default branch moved after Worker; re-plan required");
+    }
+  }
 
   const pattern = new RegExp(
     `^bounded-worker-candidate-issue-${provenance.issueNumber}-plan-${provenance.approvedPlan.runId}-approval-${provenance.approvalCommentId}` +
@@ -251,10 +294,11 @@ export function validateWorkerCandidateAgainstHandoff(input: {
   readonly handoffArtifact: HandoffArtifactMetadata;
   readonly workerSource: PlanCandidateWorkerSourceRun;
   readonly workerArtifact: ArtifactMetadata;
+  readonly recoveryGuard?: TrustedRecoveryCompareGuard;
 }): void {
   const provenance = verifyWorkerCandidateProvenanceShape(input.provenance);
   verifyCandidateChangeSet(input.candidate, input.bundle.contract, input.bundle.context);
-  validatePlanCandidateWorkerSource(provenance, input.workerSource, input.workerArtifact);
+  validatePlanCandidateWorkerSource(provenance, input.workerSource, input.workerArtifact, input.recoveryGuard);
 
   if (input.handoffSource.id !== provenance.sourceHandoff.runId || input.handoffSource.runAttempt !== provenance.sourceHandoff.runAttempt) {
     throw new Error("Worker provenance source Handoff run mismatch");
@@ -343,6 +387,7 @@ function bridgePayload(value: PlanCandidateBridgeProvenance): PlanCandidateBridg
     candidateDigest: value.candidateDigest,
     deterministicValidation: value.deterministicValidation,
     candidatePatchDigest: value.candidatePatchDigest,
+    ...(value.recoveryGuard ? { recoveryGuard: { ...value.recoveryGuard } } : {}),
     bridgeWorkflow: { ...value.bridgeWorkflow },
   };
 }
@@ -372,6 +417,7 @@ export function createPlanCandidateBridgeProvenance(input: {
   readonly handoffArtifact: HandoffArtifactMetadata;
   readonly workerSource: PlanCandidateWorkerSourceRun;
   readonly workerArtifact: ArtifactMetadata;
+  readonly recoveryGuard?: TrustedRecoveryCompareGuard;
   readonly deterministicValidation: DeterministicValidationResult;
   readonly candidatePatch: string | Buffer;
   readonly bridgeRun: BridgeRunIdentity;
@@ -384,6 +430,7 @@ export function createPlanCandidateBridgeProvenance(input: {
     handoffArtifact: input.handoffArtifact,
     workerSource: input.workerSource,
     workerArtifact: input.workerArtifact,
+    ...(input.recoveryGuard ? { recoveryGuard: input.recoveryGuard } : {}),
   });
   verifyDeterministicValidationResult(input.deterministicValidation);
   if (input.deterministicValidation.status !== "PASS") throw new Error("deterministic validation did not PASS");
@@ -403,10 +450,11 @@ export function createPlanCandidateBridgeProvenance(input: {
   }
   positiveInteger("bridge run id", input.bridgeRun.runId);
   positiveInteger("bridge run attempt", input.bridgeRun.runAttempt);
-  assertSha("bridge trusted code SHA", input.bridgeRun.trustedCodeSha);
-  if (input.bridgeRun.trustedCodeSha !== input.bundle.contract.baseSha) {
-    throw new Error("bridge trusted code SHA must equal exact candidate base SHA");
-  }
+  validateBridgeTrustedCodeIdentity({
+    baseSha: input.bundle.contract.baseSha,
+    trustedCodeSha: input.bridgeRun.trustedCodeSha,
+    ...(input.recoveryGuard ? { recoveryGuard: input.recoveryGuard } : {}),
+  });
   const patchSize = typeof input.candidatePatch === "string" ? Buffer.byteLength(input.candidatePatch) : input.candidatePatch.length;
   if (patchSize < 1) throw new Error("candidate patch must be non-empty");
 
@@ -438,6 +486,7 @@ export function createPlanCandidateBridgeProvenance(input: {
     candidateDigest: input.candidate.candidateDigest,
     deterministicValidation: input.deterministicValidation,
     candidatePatchDigest: sha256Prefixed(input.candidatePatch),
+    ...(input.recoveryGuard ? { recoveryGuard: { ...input.recoveryGuard } } : {}),
     bridgeWorkflow: {
       workflowPath: PLAN_CANDIDATE_BRIDGE_WORKFLOW_PATH,
       runId: input.bridgeRun.runId,
@@ -456,6 +505,9 @@ export function verifyPlanCandidateBridgeProvenance(value: unknown): PlanCandida
   if (!record(value.requirement) || !record(value.sourcePlanAuthorize) || !record(value.sourceHandoff) ||
       !record(value.sourceWorker) || !record(value.bridgeWorkflow)) {
     throw new Error("PLAN candidate bridge provenance identity is incomplete");
+  }
+  if (value.recoveryGuard !== undefined && !record(value.recoveryGuard)) {
+    throw new Error("PLAN candidate bridge recovery guard shape is invalid");
   }
   if (typeof value.repository !== "string" || !/^[^/]+\/[^/]+$/.test(value.repository)) throw new Error("bridge repository invalid");
   positiveInteger("bridge issueNumber", value.issueNumber);
@@ -527,15 +579,16 @@ export function verifyPlanCandidateBridgeProvenance(value: unknown): PlanCandida
     throw new Error("bridge deterministic validation mismatch");
   }
 
-  if (
-    provenance.bridgeWorkflow.workflowPath !== PLAN_CANDIDATE_BRIDGE_WORKFLOW_PATH ||
-    provenance.bridgeWorkflow.trustedCodeSha !== provenance.baseSha
-  ) {
+  if (provenance.bridgeWorkflow.workflowPath !== PLAN_CANDIDATE_BRIDGE_WORKFLOW_PATH) {
     throw new Error("bridge workflow identity mismatch");
   }
   positiveInteger("bridge workflow runId", provenance.bridgeWorkflow.runId);
   positiveInteger("bridge workflow runAttempt", provenance.bridgeWorkflow.runAttempt);
-  assertSha("bridge workflow trustedCodeSha", provenance.bridgeWorkflow.trustedCodeSha);
+  validateBridgeTrustedCodeIdentity({
+    baseSha: provenance.baseSha,
+    trustedCodeSha: provenance.bridgeWorkflow.trustedCodeSha,
+    ...(provenance.recoveryGuard ? { recoveryGuard: provenance.recoveryGuard } : {}),
+  });
 
   if (sha256(JSON.stringify(bridgePayload(provenance))) !== provenance.bridgeDigest) {
     throw new Error("bridge provenance digest mismatch");
