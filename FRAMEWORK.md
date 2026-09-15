@@ -4,7 +4,7 @@ This repository is bootstrapped with AI Development Framework MVP v0.2 canonical
 
 - Source repository: `erpsarang/self-improvement-mvp`
 - Framework line: `v0.2`
-- Framework source SHA: `eeb5c5b66c679f14894d11fa8c276e0e11ad2fa7`
+- Framework source SHA: `0f6d4a9006e50294feba2c4da9291be2fef63700`
 - Canonical path: User Requirement → Read-only AI PLAN → Human `PLAN-승인` → PLAN_AUTHORIZE → ImplementContract + Context Pack → bounded untrusted Worker → exact-base deterministic CI → bounded pre-Bridge repair (max 2) if required → PASS candidate only → PLAN Bridge → SEAL → PUBLISH → VERIFY → Semantic REVIEW → bounded LOCAL_FIX if required → MERGE_READY → Human Merge.
 - PLAN contract: `questions` contains blocking questions only; `implementationScope.ready=true` requires `questions=[]`; any blocking question requires `ready=false` with an empty implementation scope.
 - PLAN context: exact source paths or function names are optional hints, not required user input. The bounded selector preserves an explicitly referenced runtime source and its direct test when present. Business-relation augmentation parses actual TypeScript/JavaScript import syntax, ignores import-looking strings/comments, evaluates relevant test-to-runtime relationships, and prefers application runtime sources over Framework self-test sources when recovering source + direct test from business-only requirements. If an exact application runtime path is already selected, weaker lexical relevance must not replace that high-confidence runtime/direct-test pair.
