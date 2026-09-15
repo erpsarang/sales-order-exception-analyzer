@@ -1,5 +1,14 @@
 import { analyzeOrder, type OrderAnalysisResult, type OrderInput } from "./order-analysis.js";
 
+type ReasonCode = OrderAnalysisResult["reasonCodes"][number];
+
+const reasonCodeOrder: readonly ReasonCode[] = [
+  "INVALID_QUANTITY",
+  "CUSTOMER_BLOCKED",
+  "MATERIAL_BLOCKED",
+  "INSUFFICIENT_STOCK",
+];
+
 export interface BatchOrderResult extends OrderAnalysisResult {
   orderId: string;
 }
@@ -10,6 +19,8 @@ export interface BatchOrderAnalysisResult {
     totalCount: number;
     shipReadyCount: number;
     exceptionCount: number;
+    reasonCounts: Record<ReasonCode, number>;
+    topReasonCodes: ReasonCode[];
   };
 }
 
@@ -19,15 +30,36 @@ export function analyzeOrderBatch(
 ): BatchOrderAnalysisResult {
   let shipReadyCount = 0;
   let exceptionCount = 0;
+  const reasonCounts: Record<ReasonCode, number> = {
+    INVALID_QUANTITY: 0,
+    CUSTOMER_BLOCKED: 0,
+    MATERIAL_BLOCKED: 0,
+    INSUFFICIENT_STOCK: 0,
+  };
   const results = orders.map((order) => {
     const analysis = analyzeOrder(order);
     if (analysis.status === "SHIP_READY") shipReadyCount += 1;
-    else exceptionCount += 1;
+    else {
+      exceptionCount += 1;
+      for (const reasonCode of analysis.reasonCodes) {
+        reasonCounts[reasonCode] += 1;
+      }
+    }
     return { orderId: order.orderId, ...analysis };
   });
+  const maxReasonCount = Math.max(...reasonCodeOrder.map((code) => reasonCounts[code]));
+  const topReasonCodes = maxReasonCount === 0
+    ? []
+    : reasonCodeOrder.filter((code) => reasonCounts[code] === maxReasonCount);
 
   return {
     results,
-    summary: { totalCount: results.length, shipReadyCount, exceptionCount },
+    summary: {
+      totalCount: results.length,
+      shipReadyCount,
+      exceptionCount,
+      reasonCounts,
+      topReasonCodes,
+    },
   };
 }
