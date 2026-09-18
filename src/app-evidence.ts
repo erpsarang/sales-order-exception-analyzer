@@ -7,6 +7,7 @@ export interface AppRuntimeEvidenceScenario {
   readonly input: {
     readonly orderCount: number;
     readonly orderIds: readonly string[];
+    readonly orders: ReadonlyArray<Readonly<OrderInput>>;
   };
   readonly output: ReturnType<typeof analyzeOrderBatch>;
 }
@@ -42,6 +43,7 @@ function scenario(
     input: {
       orderCount: orders.length,
       orderIds: orders.map(({ orderId }) => orderId),
+      orders: orders.map((order) => ({ ...order })),
     },
     output: analyzeOrderBatch(orders),
   };
