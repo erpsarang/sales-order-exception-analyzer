@@ -10,7 +10,8 @@ export type LearnEvidenceKind =
   | "orchestration-summary"
   | "test-execution"
   | "recovery-event"
-  | "human-boundary";
+  | "human-boundary"
+  | "app-runtime";
 
 export type LearnEvidenceSource =
   | { readonly kind: "issue"; readonly issueNumber: number }
@@ -89,6 +90,7 @@ const EVIDENCE_KINDS = new Set<string>([
   "test-execution",
   "recovery-event",
   "human-boundary",
+  "app-runtime",
 ]);
 
 const ALLOWED_SOURCE_KINDS: Record<LearnEvidenceKind, readonly LearnEvidenceSource["kind"][]> = {
@@ -98,6 +100,7 @@ const ALLOWED_SOURCE_KINDS: Record<LearnEvidenceKind, readonly LearnEvidenceSour
   "test-execution": ["artifact"],
   "recovery-event": ["workflow-run", "artifact"],
   "human-boundary": ["pull-request", "issue"],
+  "app-runtime": ["workflow-run", "artifact"],
 };
 
 function sha256(value: string | Buffer): string {
