@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCompletedCycleRecord } from "../src/self-improvement/completed-cycle.js";
-import { createLearnInputPack } from "../src/self-improvement/learn-input-pack.js";
+import { createLearnInputPack, type LearnEvidenceInput } from "../src/self-improvement/learn-input-pack.js";
 import { createLearnReport } from "../src/self-improvement/learn-report.js";
 
 const sha = "a".repeat(40);
@@ -54,7 +54,7 @@ function raw(packDigest: string, evidenceIds: string[]) {
     lessons: [],
     improvementHypotheses: [{
       id: "hypothesis-1",
-      statement: "앱의 업무 동작을 개선한다.",
+      statement: "실제 업무 불편과 App 동작을 함께 근거로 App을 개선한다.",
       evidenceIds,
       confidence: "medium",
     }],
@@ -62,23 +62,8 @@ function raw(packDigest: string, evidenceIds: string[]) {
   };
 }
 
-test("App Evidence가 없으면 improvement hypothesis를 거부한다", () => {
-  const r = record();
-  const pack = createLearnInputPack(r, [{
-    evidenceId: "requirement-01",
-    kind: "requirement-summary",
-    repository: r.repository,
-    cycle: cycle(r),
-    source: { kind: "issue", issueNumber: 32 },
-    content: "{}",
-  }]);
-
-  assert.throws(() => createLearnReport(pack, raw(pack.packDigest, ["requirement-01"]), identity));
-});
-
-test("improvement hypothesis는 app-runtime evidence를 반드시 인용한다", () => {
-  const r = record();
-  const pack = createLearnInputPack(r, [
+function evidence(r: ReturnType<typeof record>): LearnEvidenceInput[] {
+  return [
     {
       evidenceId: "requirement-01",
       kind: "requirement-summary",
@@ -95,9 +80,51 @@ test("improvement hypothesis는 app-runtime evidence를 반드시 인용한다",
       source: { kind: "workflow-run", runId: 20, runAttempt: 1 },
       content: "{\"kind\":\"sales-order-app-runtime-evidence\"}",
     },
-  ]);
+    {
+      evidenceId: "business-feedback-01",
+      kind: "business-feedback",
+      repository: r.repository,
+      cycle: cycle(r),
+      source: {
+        kind: "business-issue",
+        issueNumber: 8,
+        titleBodyDigest: "2".repeat(64),
+      },
+      content: "{\"issueNumber\":8,\"title\":\"업무 요구\",\"body\":\"실제 불편\"}",
+    },
+  ];
+}
+
+test("App/Business Evidence가 모두 없으면 improvement hypothesis를 거부한다", () => {
+  const r = record();
+  const pack = createLearnInputPack(r, [evidence(r)[0]!]);
 
   assert.throws(() => createLearnReport(pack, raw(pack.packDigest, ["requirement-01"]), identity));
-  const report = createLearnReport(pack, raw(pack.packDigest, ["app-runtime-01"]), identity);
+});
+
+test("App Runtime Evidence만으로는 improvement hypothesis를 허용하지 않는다", () => {
+  const r = record();
+  const items = evidence(r);
+  const pack = createLearnInputPack(r, [items[0]!, items[1]!]);
+
+  assert.throws(() => createLearnReport(pack, raw(pack.packDigest, ["app-runtime-01"]), identity));
+});
+
+test("improvement hypothesis는 App Runtime과 Business Feedback을 모두 직접 인용해야 한다", () => {
+  const r = record();
+  const pack = createLearnInputPack(r, evidence(r));
+
+  assert.throws(() =>
+    createLearnReport(pack, raw(pack.packDigest, ["app-runtime-01"]), identity),
+  );
+  assert.throws(() =>
+    createLearnReport(pack, raw(pack.packDigest, ["business-feedback-01"]), identity),
+  );
+
+  const report = createLearnReport(
+    pack,
+    raw(pack.packDigest, ["app-runtime-01", "business-feedback-01"]),
+    identity,
+  );
   assert.equal(report.improvementHypotheses.length, 1);
 });
