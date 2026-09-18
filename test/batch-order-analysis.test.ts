@@ -36,13 +36,14 @@ const zeroReasonCounts = (): Record<ReasonCode, number> => ({
 });
 
 const cases = [
-  { name: "정상 주문만", orders: [normalOrder, { ...normalOrder, availableQuantity: 10 }], ready: 2, exceptions: 0 },
-  { name: "예외 주문만", orders: [exceptionOrder, { ...normalOrder, availableQuantity: 0 }], ready: 0, exceptions: 2 },
-  { name: "정상 및 예외 주문 혼합", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }], ready: 2, exceptions: 1 },
-  { name: "빈 배열", orders: [], ready: 0, exceptions: 0 },
+  { name: "정상 주문만", orders: [normalOrder, { ...normalOrder, availableQuantity: 10 }], ready: 2, exceptions: 0, exceptionRate: 0 },
+  { name: "예외 주문만", orders: [exceptionOrder, { ...normalOrder, availableQuantity: 0 }], ready: 0, exceptions: 2, exceptionRate: 1 },
+  { name: "정상 및 예외 주문 혼합", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }], ready: 2, exceptions: 1, exceptionRate: 1 / 3 },
+  { name: "네 주문 중 한 주문만 예외", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }, normalOrder], ready: 3, exceptions: 1, exceptionRate: 0.25 },
+  { name: "빈 배열", orders: [], ready: 0, exceptions: 0, exceptionRate: 0 },
 ];
 
-for (const { name, orders, ready, exceptions } of cases) {
+for (const { name, orders, ready, exceptions, exceptionRate } of cases) {
   test(`${name}: 단일 주문과 동일한 판정 및 정확한 집계를 반환한다`, () => {
     const { results, summary } = analyzeOrderBatch(orders);
     const expectedResults = orders.map((order) => ({
@@ -65,9 +66,12 @@ for (const { name, orders, ready, exceptions } of cases) {
       totalCount: orders.length,
       shipReadyCount: ready,
       exceptionCount: exceptions,
+      exceptionRate,
       reasonCounts,
       topReasonCodes,
     });
+    assert.equal(typeof summary.exceptionRate, "number");
+    assert.ok(Number.isFinite(summary.exceptionRate));
     assert.equal(summary.shipReadyCount + summary.exceptionCount, summary.totalCount);
   });
 }
@@ -89,6 +93,7 @@ for (const { code, overrides } of singleReasonCases) {
       totalCount: 2,
       shipReadyCount: 1,
       exceptionCount: 1,
+      exceptionRate: 0.5,
       reasonCounts: { ...zeroReasonCounts(), [code]: 1 },
       topReasonCodes: [code],
     });
@@ -103,6 +108,7 @@ test("한 예외 주문의 복수 사유를 각각 집계하고 동률 사유를
     totalCount: 1,
     shipReadyCount: 0,
     exceptionCount: 1,
+    exceptionRate: 1,
     reasonCounts: {
       INVALID_QUANTITY: 0,
       CUSTOMER_BLOCKED: 1,
@@ -122,6 +128,7 @@ test("네 사유의 동률은 입력 순서와 관계없이 지정된 순서로 
     totalCount: 4,
     shipReadyCount: 0,
     exceptionCount: 4,
+    exceptionRate: 1,
     reasonCounts: {
       INVALID_QUANTITY: 1,
       CUSTOMER_BLOCKED: 1,
@@ -154,6 +161,7 @@ test("빈 입력과 정상 주문만 있는 입력은 모든 사유가 0건이�
       totalCount: orders.length,
       shipReadyCount: orders.length,
       exceptionCount: 0,
+      exceptionRate: 0,
       reasonCounts: zeroReasonCounts(),
       topReasonCodes: [],
     });
@@ -179,6 +187,7 @@ test("동일 객체 및 동일 주문 ID의 중복 입력을 항목마다 집계
     totalCount: 3,
     shipReadyCount: 0,
     exceptionCount: 3,
+    exceptionRate: 1,
     reasonCounts: {
       INVALID_QUANTITY: 0,
       CUSTOMER_BLOCKED: 3,
@@ -217,6 +226,7 @@ test("집계 객체와 최다 사유 배열은 호출마다 독립적이다", ()
     totalCount: 1,
     shipReadyCount: 0,
     exceptionCount: 1,
+    exceptionRate: 1,
     reasonCounts: { ...zeroReasonCounts(), CUSTOMER_BLOCKED: 1 },
     topReasonCodes: ["CUSTOMER_BLOCKED"],
   };
