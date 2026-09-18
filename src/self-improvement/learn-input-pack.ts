@@ -10,7 +10,7 @@ export type LearnEvidenceKind =
   | "orchestration-summary"
   | "test-execution"
   | "recovery-event"
-  | "human-boundary";
+  | "human-boundary"\n  | "app-runtime";
 
 export type LearnEvidenceSource =
   | { readonly kind: "issue"; readonly issueNumber: number }
