@@ -36,14 +36,14 @@ const zeroReasonCounts = (): Record<ReasonCode, number> => ({
 });
 
 const cases = [
-  { name: "정상 주문만", orders: [normalOrder, { ...normalOrder, availableQuantity: 10 }], ready: 2, exceptions: 0, exceptionRate: 0 },
-  { name: "예외 주문만", orders: [exceptionOrder, { ...normalOrder, availableQuantity: 0 }], ready: 0, exceptions: 2, exceptionRate: 1 },
-  { name: "정상 및 예외 주문 혼합", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }], ready: 2, exceptions: 1, exceptionRate: 1 / 3 },
-  { name: "네 주문 중 한 주문만 예외", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }, normalOrder], ready: 3, exceptions: 1, exceptionRate: 0.25 },
-  { name: "빈 배열", orders: [], ready: 0, exceptions: 0, exceptionRate: 0 },
+  { name: "정상 주문만", orders: [normalOrder, { ...normalOrder, availableQuantity: 10 }], ready: 2, exceptions: 0, exceptionRate: 0, exceptionOrderIds: [] },
+  { name: "예외 주문만", orders: [exceptionOrder, { ...normalOrder, availableQuantity: 0 }], ready: 0, exceptions: 2, exceptionRate: 1, exceptionOrderIds: ["SO-001", "SO-003"] },
+  { name: "정상 및 예외 주문 혼합", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }], ready: 2, exceptions: 1, exceptionRate: 1 / 3, exceptionOrderIds: ["SO-001"] },
+  { name: "네 주문 중 한 주문만 예외", orders: [normalOrder, exceptionOrder, { ...normalOrder, orderId: "SO-002" }, normalOrder], ready: 3, exceptions: 1, exceptionRate: 0.25, exceptionOrderIds: ["SO-001"] },
+  { name: "빈 배열", orders: [], ready: 0, exceptions: 0, exceptionRate: 0, exceptionOrderIds: [] },
 ];
 
-for (const { name, orders, ready, exceptions, exceptionRate } of cases) {
+for (const { name, orders, ready, exceptions, exceptionRate, exceptionOrderIds } of cases) {
   test(`${name}: 단일 주문과 동일한 판정 및 정확한 집계를 반환한다`, () => {
     const { results, summary } = analyzeOrderBatch(orders);
     const expectedResults = orders.map((order) => ({
@@ -67,6 +67,7 @@ for (const { name, orders, ready, exceptions, exceptionRate } of cases) {
       shipReadyCount: ready,
       exceptionCount: exceptions,
       exceptionRate,
+      exceptionOrderIds,
       reasonCounts,
       topReasonCodes,
     });
@@ -94,6 +95,7 @@ for (const { code, overrides } of singleReasonCases) {
       shipReadyCount: 1,
       exceptionCount: 1,
       exceptionRate: 0.5,
+      exceptionOrderIds: ["SO-003"],
       reasonCounts: { ...zeroReasonCounts(), [code]: 1 },
       topReasonCodes: [code],
     });
@@ -109,6 +111,7 @@ test("한 예외 주문의 복수 사유를 각각 집계하고 동률 사유를
     shipReadyCount: 0,
     exceptionCount: 1,
     exceptionRate: 1,
+    exceptionOrderIds: ["SO-003"],
     reasonCounts: {
       INVALID_QUANTITY: 0,
       CUSTOMER_BLOCKED: 1,
@@ -129,6 +132,7 @@ test("네 사유의 동률은 입력 순서와 관계없이 지정된 순서로 
     shipReadyCount: 0,
     exceptionCount: 4,
     exceptionRate: 1,
+    exceptionOrderIds: ["SO-003", "SO-003", "SO-003", "SO-003"],
     reasonCounts: {
       INVALID_QUANTITY: 1,
       CUSTOMER_BLOCKED: 1,
@@ -162,6 +166,7 @@ test("빈 입력과 정상 주문만 있는 입력은 모든 사유가 0건이�
       shipReadyCount: orders.length,
       exceptionCount: 0,
       exceptionRate: 0,
+      exceptionOrderIds: [],
       reasonCounts: zeroReasonCounts(),
       topReasonCodes: [],
     });
@@ -173,6 +178,28 @@ test("입력 순서와 중복 주문을 보존한다", () => {
   assert.deepEqual(analyzeOrderBatch(orders).results.map((result) => result.orderId), [
     "SO-003", "SO-001", "SO-002", "SO-003",
   ]);
+});
+
+test("예외 ID만 입력 순서대로 반환하며 중복 ID의 정상 및 예외 항목을 구분한다", () => {
+  const blockedOrder = Object.freeze({ ...normalOrder, customerBlocked: true });
+  const orders = Object.freeze([
+    normalOrder,
+    blockedOrder,
+    exceptionOrder,
+    { ...normalOrder, orderId: "SO-002" },
+    blockedOrder,
+    { ...normalOrder, orderId: "SO-001" },
+    { ...normalOrder, orderId: "SO-002", availableQuantity: 0 },
+  ].map((order) => Object.freeze(order)));
+  const snapshot = orders.map((order) => ({ ...order }));
+  const { results, summary } = analyzeOrderBatch(orders);
+  assert.deepEqual(results, orders.map((order) => ({
+    orderId: order.orderId,
+    ...analyzeOrder(order),
+  })));
+  assert.deepEqual(summary.exceptionOrderIds, ["SO-003", "SO-001", "SO-003", "SO-002"]);
+  assert.equal(summary.exceptionOrderIds.length, summary.exceptionCount);
+  assert.deepEqual(orders, snapshot);
 });
 
 test("동일 객체 및 동일 주문 ID의 중복 입력을 항목마다 집계한다", () => {
@@ -188,6 +215,7 @@ test("동일 객체 및 동일 주문 ID의 중복 입력을 항목마다 집계
     shipReadyCount: 0,
     exceptionCount: 3,
     exceptionRate: 1,
+    exceptionOrderIds: ["SO-003", "SO-003", "SO-003"],
     reasonCounts: {
       INVALID_QUANTITY: 0,
       CUSTOMER_BLOCKED: 3,
@@ -204,6 +232,10 @@ test("읽기 전용 입력 배열과 주문 객체를 변경하지 않고 반복
   const first = analyzeOrderBatch(orders);
   assert.deepEqual(analyzeOrderBatch(orders), first);
   assert.deepEqual(orders, snapshot);
+  first.summary.exceptionOrderIds[0] = "CHANGED";
+  first.summary.exceptionOrderIds.push("EXTRA");
+  assert.deepEqual(first.results.map((result) => result.orderId), ["SO-003", "SO-001"]);
+  assert.deepEqual(analyzeOrderBatch(orders).summary.exceptionOrderIds, ["SO-001"]);
   first.results[1]!.reasonCodes.length = 0;
   first.results.reverse();
   assert.deepEqual(analyzeOrderBatch(orders).results, orders.map((order) => ({
@@ -219,14 +251,17 @@ test("집계 객체와 최다 사유 배열은 호출마다 독립적이다", ()
   const second = analyzeOrderBatch(orders);
   assert.notStrictEqual(first.summary.reasonCounts, second.summary.reasonCounts);
   assert.notStrictEqual(first.summary.topReasonCodes, second.summary.topReasonCodes);
+  assert.notStrictEqual(first.summary.exceptionOrderIds, second.summary.exceptionOrderIds);
   first.summary.reasonCounts.CUSTOMER_BLOCKED = 99;
   first.summary.reasonCounts.INVALID_QUANTITY = 10;
   first.summary.topReasonCodes.length = 0;
+  first.summary.exceptionOrderIds.length = 0;
   const expectedSummary = {
     totalCount: 1,
     shipReadyCount: 0,
     exceptionCount: 1,
     exceptionRate: 1,
+    exceptionOrderIds: ["SO-003"],
     reasonCounts: { ...zeroReasonCounts(), CUSTOMER_BLOCKED: 1 },
     topReasonCodes: ["CUSTOMER_BLOCKED"],
   };
@@ -235,4 +270,24 @@ test("집계 객체와 최다 사유 배열은 호출마다 독립적이다", ()
   assert.deepEqual(analyzeOrderBatch([]).summary.reasonCounts, zeroReasonCounts());
   assert.deepEqual(analyzeOrderBatch([normalOrder]).summary.topReasonCodes, []);
   assert.deepEqual(second.summary, expectedSummary);
+});
+
+test("빈 입력과 정상 입력의 빈 예외 ID 배열도 호출마다 독립적이다", () => {
+  const emptyFirst = analyzeOrderBatch([]);
+  const emptySecond = analyzeOrderBatch([]);
+  const normalFirst = analyzeOrderBatch([normalOrder]);
+  const normalSecond = analyzeOrderBatch([normalOrder]);
+  const batches = [emptyFirst, emptySecond, normalFirst, normalSecond];
+  for (const [index, batch] of batches.entries()) {
+    assert.deepEqual(batch.summary.exceptionOrderIds, []);
+    for (const other of batches.slice(index + 1)) {
+      assert.notStrictEqual(batch.summary.exceptionOrderIds, other.summary.exceptionOrderIds);
+    }
+  }
+  emptyFirst.summary.exceptionOrderIds.push("EMPTY-MUTATION");
+  normalFirst.summary.exceptionOrderIds.push("NORMAL-MUTATION");
+  assert.deepEqual(emptySecond.summary.exceptionOrderIds, []);
+  assert.deepEqual(normalSecond.summary.exceptionOrderIds, []);
+  assert.deepEqual(analyzeOrderBatch([]).summary.exceptionOrderIds, []);
+  assert.deepEqual(analyzeOrderBatch([normalOrder]).summary.exceptionOrderIds, []);
 });
