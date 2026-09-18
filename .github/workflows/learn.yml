@@ -236,6 +236,8 @@ jobs:
     if: needs.prepare.result == 'success' && needs.learner.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      report_artifact_name: ${{ steps.finalize.outputs.report_artifact_name }}
     permissions:
       contents: read
       actions: read
@@ -361,3 +363,62 @@ jobs:
           name: ${{ steps.finalize.outputs.report_artifact_name }}
           path: ${{ runner.temp }}/learn-final/learn-report.json
           if-no-files-found: error
+
+  dispatch_candidate:
+    name: Read-only AI LEARN → Trusted Improvement Candidate
+    needs: [prepare, finalize]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.finalize.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: exact LEARN/source identity로 Candidate 자동 시작
+        uses: actions/github-script@v7
+        env:
+          LEARN_RUN_ID: ${{ github.run_id }}
+          LEARN_RUN_ATTEMPT: ${{ github.run_attempt }}
+          LEARN_REPORT_ARTIFACT_NAME: ${{ needs.finalize.outputs.report_artifact_name }}
+          SOURCE_RUN_ID: ${{ needs.prepare.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.prepare.outputs.source_run_attempt }}
+          LEARN_INPUT_ARTIFACT_NAME: ${{ needs.prepare.outputs.input_artifact_name }}
+        with:
+          script: |
+            const learnRunId = Number(process.env.LEARN_RUN_ID);
+            const learnRunAttempt = Number(process.env.LEARN_RUN_ATTEMPT);
+            const sourceRunId = Number(process.env.SOURCE_RUN_ID);
+            const sourceRunAttempt = Number(process.env.SOURCE_RUN_ATTEMPT);
+            const reportArtifact = process.env.LEARN_REPORT_ARTIFACT_NAME || '';
+            const inputArtifact = process.env.LEARN_INPUT_ARTIFACT_NAME || '';
+
+            if (
+              !Number.isSafeInteger(learnRunId) || learnRunId <= 0 ||
+              !Number.isSafeInteger(learnRunAttempt) || learnRunAttempt <= 0 ||
+              !Number.isSafeInteger(sourceRunId) || sourceRunId <= 0 ||
+              !Number.isSafeInteger(sourceRunAttempt) || sourceRunAttempt <= 0 ||
+              !reportArtifact.trim() ||
+              !inputArtifact.trim()
+            ) {
+              core.setFailed('Improvement Candidate 자동 dispatch identity가 불완전합니다');
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'improvement-candidate.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                learn_run_id: String(learnRunId),
+                learn_run_attempt: String(learnRunAttempt),
+                learn_report_artifact_name: reportArtifact,
+                source_run_id: String(sourceRunId),
+                source_run_attempt: String(sourceRunAttempt),
+                learn_input_artifact_name: inputArtifact,
+              },
+            });
+            core.info('Trusted Improvement Candidate를 자동 dispatch했습니다');
+
