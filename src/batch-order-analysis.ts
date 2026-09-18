@@ -20,6 +20,7 @@ export interface BatchOrderAnalysisResult {
     shipReadyCount: number;
     exceptionCount: number;
     exceptionRate: number;
+    exceptionOrderIds: string[];
     reasonCounts: Record<ReasonCode, number>;
     topReasonCodes: ReasonCode[];
   };
@@ -48,6 +49,9 @@ export function analyzeOrderBatch(
     }
     return { orderId: order.orderId, ...analysis };
   });
+  const exceptionOrderIds = results
+    .filter((result) => result.status === "EXCEPTION")
+    .map((result) => result.orderId);
   const maxReasonCount = Math.max(...reasonCodeOrder.map((code) => reasonCounts[code]));
   const topReasonCodes = maxReasonCount === 0
     ? []
@@ -60,6 +64,7 @@ export function analyzeOrderBatch(
       shipReadyCount,
       exceptionCount,
       exceptionRate: results.length === 0 ? 0 : exceptionCount / results.length,
+      exceptionOrderIds,
       reasonCounts,
       topReasonCodes,
     },
