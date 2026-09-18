@@ -19,6 +19,7 @@ export interface BatchOrderAnalysisResult {
     totalCount: number;
     shipReadyCount: number;
     exceptionCount: number;
+    exceptionRate: number;
     reasonCounts: Record<ReasonCode, number>;
     topReasonCodes: ReasonCode[];
   };
@@ -58,6 +59,7 @@ export function analyzeOrderBatch(
       totalCount: results.length,
       shipReadyCount,
       exceptionCount,
+      exceptionRate: results.length === 0 ? 0 : exceptionCount / results.length,
       reasonCounts,
       topReasonCodes,
     },
