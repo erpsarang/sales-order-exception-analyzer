@@ -22,6 +22,29 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
   assert.equal(mixed.output.summary.exceptionCount, 3);
   assert.equal(mixed.output.summary.shipReadyCount, 1);
 
+  assert.equal(mixed.input.orders.length, mixed.input.orderCount);
+  assert.deepEqual(
+    Object.keys(mixed.input.orders[0]!).sort(),
+    [
+      "availableQuantity",
+      "customerBlocked",
+      "customerId",
+      "materialBlocked",
+      "materialId",
+      "orderId",
+      "orderQuantity",
+    ],
+  );
+  assert.deepEqual(mixed.input.orders[1], {
+    orderId: "SO-INVALID",
+    customerId: "C-001",
+    materialId: "M-001",
+    orderQuantity: 0,
+    availableQuantity: 20,
+    customerBlocked: false,
+    materialBlocked: false,
+  });
+
   const duplicate = first.scenarios.find(({ id }) => id === "duplicate-exception-id")!;
   assert.deepEqual(duplicate.output.summary.exceptionOrderIds, ["SO-DUP", "SO-DUP"]);
   assert.ok(Buffer.byteLength(JSON.stringify(first), "utf8") <= 8_192);
