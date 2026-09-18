@@ -65,6 +65,12 @@ jobs:
       - name: trusted source 의존성 설치
         run: npm ci --ignore-scripts
 
+      - name: deterministic App Runtime Evidence 생성
+        run: npm exec -- tsx src/app-evidence-handler.ts
+        env:
+          APP_EVIDENCE_OUTPUT: ${{ runner.temp }}/learn-source/app-evidence.json
+          APP_EVIDENCE_SOURCE_SHA: ${{ github.sha }}
+
       - name: exact GitHub cycle facts와 source artifact 선택
         id: freeze
         uses: actions/github-script@v7
@@ -217,6 +223,10 @@ jobs:
           LEARN_SOURCE_FACTS_JSON: ${{ runner.temp }}/learn-source/facts.json
           ORCHESTRATION_JSON: ${{ runner.temp }}/learn-source/orchestration.json
           LEARN_SOURCE_OUTPUT_DIR: ${{ runner.temp }}/learn-source/output
+          APP_EVIDENCE_JSON: ${{ runner.temp }}/learn-source/app-evidence.json
+          APP_EVIDENCE_SOURCE_SHA: ${{ github.sha }}
+          APP_EVIDENCE_SOURCE_RUN_ID: ${{ github.run_id }}
+          APP_EVIDENCE_SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: Completed Cycle Record 저장
         id: upload_completed
