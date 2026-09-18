@@ -7,6 +7,7 @@ const orchestrator = await readFile(".github/workflows/orchestrator.yml", "utf8"
 const learnSource = await readFile(".github/workflows/learn-source.yml", "utf8");
 const learn = await readFile(".github/workflows/learn.yml", "utf8");
 const candidate = await readFile(".github/workflows/improvement-candidate.yml", "utf8");
+const candidateSource = await readFile("src/self-improvement/improvement-candidate.ts", "utf8");
 
 test("Human Merge가 끝난 MERGE_READY PR만 App Self-Improvement bootstrap 대상이다", () => {
   assert.match(bootstrap, /pull_request:\n    types: \[closed\]/);
@@ -64,7 +65,8 @@ test("Read-only AI LEARN finalize 성공 후 Trusted Improvement Candidate를 �
 
 test("자동 loop의 authority는 Candidate에서 멈추고 PLAN/IMPLEMENT/Merge를 자동 시작하지 않는다", () => {
   assert.match(candidate, /proposal-only/);
-  assert.match(candidate, /pending-human/);
+  assert.match(candidateSource, /authority: "proposal-only"/);
+  assert.match(candidateSource, /decision: "pending-human"/);
   assert.doesNotMatch(candidate, /workflow_id: 'plan|workflow_id: 'implement|pulls\.merge|enablePullRequestAutoMerge/);
   assert.doesNotMatch(learn, /workflow_id: 'plan|workflow_id: 'implement|pulls\.merge|enablePullRequestAutoMerge/);
   assert.doesNotMatch(learnSource, /workflow_id: 'plan|workflow_id: 'implement|pulls\.merge|enablePullRequestAutoMerge/);
