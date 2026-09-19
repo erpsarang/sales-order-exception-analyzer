@@ -85,6 +85,33 @@ test("bounded IMPLEMENT timeout retry usage는 raw proposal 보존 뒤 trusted s
   assert.doesNotMatch(inputCleanup, /worker-codex-home-timeout-retry/);
 });
 
+test("bounded IMPLEMENT attempt0 timeout은 job 종료 전에 persisted usage 또는 unavailable 증거를 남긴다", () => {
+  const attempt0 = workflow.slice(workflow.indexOf("\n  attempt0:\n"), workflow.indexOf("\n  timeout_retry:\n"));
+  const retryInputIndex = attempt0.indexOf("timeout retry input artifact 저장");
+  const checkoutIndex = attempt0.indexOf("Trusted attempt0 timeout usage checkout");
+  const observeIndex = attempt0.indexOf("CODEX_HOME persisted bounded IMPLEMENT attempt0 timeout usage 관찰");
+  const recordedIndex = attempt0.indexOf("trusted bounded IMPLEMENT attempt0 timeout usage artifact 저장");
+  const unavailableIndex = attempt0.indexOf("trusted bounded IMPLEMENT attempt0 timeout usage unavailable observation 저장");
+  const cleanupIndex = attempt0.indexOf("attempt0 timeout CODEX_HOME 제거");
+
+  assert.ok(retryInputIndex >= 0);
+  assert.ok(checkoutIndex > retryInputIndex);
+  assert.ok(observeIndex > checkoutIndex);
+  assert.ok(recordedIndex > observeIndex);
+  assert.ok(unavailableIndex > recordedIndex);
+  assert.ok(cleanupIndex > unavailableIndex);
+
+  assert.match(attempt0, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}[\s\S]*path: control-timeout-usage-0/);
+  assert.match(attempt0, /working-directory: control-timeout-usage-0[\s\S]*ai-usage-timeout-observation-handler\.ts/);
+  assert.match(attempt0, /CODEX_HOME_PATH: \$\{\{ runner\.temp \}\}\/worker-codex-home/);
+  assert.match(attempt0, /AI_USAGE_STAGE: bounded-implement-attempt0/);
+  assert.match(attempt0, /AI_USAGE_JOB_NAME: attempt0/);
+  assert.match(attempt0, /steps\.timeout_usage0\.outputs\.status == 'recorded'/);
+  assert.match(attempt0, /steps\.timeout_usage0\.outputs\.status == 'unavailable'/);
+  assert.match(attempt0, /bounded-implement-usage-observation\/attempt0-timeout\.json/);
+  assert.doesNotMatch(attempt0, /actions\/jobs\/.*\/logs/);
+});
+
 test("bounded IMPLEMENT attempt0 usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
   const attempt0 = workflow.slice(workflow.indexOf("\n  attempt0:\n"), workflow.indexOf("\n  timeout_retry:\n"));
   const rawIndex = attempt0.indexOf("attempt0 raw proposal artifact 저장");
