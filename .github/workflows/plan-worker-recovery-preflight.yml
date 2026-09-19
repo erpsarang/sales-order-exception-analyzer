@@ -210,7 +210,7 @@ jobs:
               !['ahead', 'identical'].includes(comparison.status) ||
               comparison.merge_base_commit.sha !== source.baseSha ||
               !Array.isArray(files) ||
-              files.length > 10
+              files.length > 12
             ) {
               core.setFailed('recovery drift is not a bounded ancestor diff');
               return;
@@ -218,10 +218,15 @@ jobs:
 
             const allowedFiles = new Set([
               '.github/workflows/plan-implement-worker.yml',
+              '.github/workflows/plan-candidate-bridge.yml',
               '.github/workflows/plan-worker-recovery-preflight.yml',
               'src/self-improvement/plan-implement-worker-handler.ts',
               'src/self-improvement/plan-implement-worker.ts',
+              'src/self-improvement/plan-candidate-bridge-handler.ts',
+              'src/self-improvement/plan-candidate-bridge.ts',
               'test/plan-implement-worker-workflow.test.ts',
+              'test/plan-candidate-bridge-workflow.test.ts',
+              'test/plan-candidate-bridge.test.ts',
               'test/plan-implement-worker.test.ts',
               'test/plan-worker-recovery-preflight-workflow.test.ts',
             ]);
