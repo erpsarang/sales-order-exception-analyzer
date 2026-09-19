@@ -24,9 +24,19 @@ export interface ExceptionPriority {
   };
 }
 
+export interface ExceptionWorklistItem {
+  rank: number;
+  resultIndex: number;
+  orderId: BatchOrderResult["orderId"];
+  orderDetails: BatchOrderResult["orderDetails"];
+  reasonCodes: BatchOrderResult["reasonCodes"];
+  exceptionGuides: BatchOrderResult["exceptionGuides"];
+}
+
 export interface BatchOrderAnalysisResult {
   results: BatchOrderResult[];
   exceptionPriorities: ExceptionPriority[];
+  exceptionWorklist: ExceptionWorklistItem[];
   summary: {
     totalCount: number;
     shipReadyCount: number;
@@ -133,10 +143,23 @@ export function analyzeOrderBatch(
   exceptionPriorities.forEach((priority, index) => {
     priority.rank = index + 1;
   });
+  // 완성된 우선순위를 그대로 연결하고 업무 값은 항목별 사본으로 보존한다.
+  const exceptionWorklist: ExceptionWorklistItem[] = exceptionPriorities.map(({ rank, resultIndex }) => {
+    const result = results[resultIndex]!;
+    return {
+      rank,
+      resultIndex,
+      orderId: result.orderId,
+      orderDetails: { ...result.orderDetails },
+      reasonCodes: [...result.reasonCodes],
+      exceptionGuides: result.exceptionGuides.map((guide) => ({ ...guide })),
+    };
+  });
 
   return {
     results,
     exceptionPriorities,
+    exceptionWorklist,
     summary: {
       totalCount: results.length,
       shipReadyCount,
