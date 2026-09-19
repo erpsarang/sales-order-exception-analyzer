@@ -228,6 +228,7 @@ jobs:
           prompt-file: ${{ runner.temp }}/learn-request/learn-prompt.md
           output-schema-file: ${{ runner.temp }}/learn-request/learn-output.schema.json
           output-file: ${{ runner.temp }}/learner-output/learner.json
+          model: gpt-5.6-luna
           effort: medium
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
@@ -369,7 +370,7 @@ jobs:
           LEARN_INPUT_ARTIFACT_DIGEST: ${{ steps.source.outputs.input_artifact_digest }}
           LEARNER_PROVIDER: OpenAI
           LEARNER_ACTION: openai/codex-action@v1
-          LEARNER_MODEL: action-default
+          LEARNER_MODEL: gpt-5.6-luna
           LEARNER_REASONING_EFFORT: medium
 
       - name: validated untrusted LEARN report 저장
