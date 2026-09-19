@@ -19,9 +19,17 @@ test("Recovery Preflight는 명시적 Issue 하나만 입력받고 AI를 호출�
 
 test("Recovery Preflight는 STALLED_WORKER와 failed Worker/Handoff exact identity를 검증한다", () => {
   assert.match(workflow, /ai-dev-framework:STALLED_WORKER issue=/);
-  assert.match(workflow, /expected exactly one STALLED_WORKER marker/);
+  assert.match(workflow, /expected at least one STALLED_WORKER marker/);
+  assert.match(workflow, /expected exactly one STALLED Handoff cycle/);
+  assert.match(workflow, /createdAt: comment\.created_at/);
+  assert.match(workflow, /selected latest STALLED_WORKER marker/);
   assert.match(workflow, /PLAN Bounded IMPLEMENT Worker/);
   assert.match(workflow, /worker\.conclusion !== 'failure'/);
+  assert.match(workflow, /baseToWorker/);
+  assert.match(workflow, /workerToCurrent/);
+  assert.match(workflow, /outside approved-base ancestry/);
+  assert.match(workflow, /not an ancestor of current default/);
+  assert.doesNotMatch(workflow, /worker\.head_sha !== source\.baseSha/);
   assert.match(workflow, /Trusted PLAN IMPLEMENT Handoff/);
   assert.match(workflow, /handoff\.conclusion !== 'success'/);
   assert.match(workflow, /expected one exact Handoff artifact/);
