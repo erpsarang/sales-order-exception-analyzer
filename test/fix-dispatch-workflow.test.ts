@@ -115,6 +115,31 @@ test("FIX Worker는 Terra + no reasoning을 명시 고정한다", () => {
   assert.doesNotMatch(workerJob, /model: gpt-6-astra/);
 });
 
+test("FIX usage는 snapshot 보존 뒤 exact trusted control-plane에서 same-job 수집한다", () => {
+  assert.match(workerJob, /codex-home: \$\{\{ runner\.temp \}\}\/fix-codex-home/);
+
+  const snapshotIndex = workerJob.indexOf("untrusted FIX workspace snapshot 저장");
+  const usageCheckoutIndex = workerJob.indexOf("exact trusted usage control-plane checkout");
+  const usageParseIndex = workerJob.indexOf("CODEX_HOME persisted FIX usage exact 기록");
+  assert.ok(snapshotIndex >= 0);
+  assert.ok(usageCheckoutIndex > snapshotIndex);
+  assert.ok(usageParseIndex > usageCheckoutIndex);
+
+  assert.match(workerJob, /ref: \$\{\{ needs\.prepare\.outputs\.trusted_code_sha \}\}/);
+  assert.match(workerJob, /path: usage-control/);
+  assert.match(workerJob, /token: \$\{\{ github\.token \}\}/);
+  assert.match(workerJob, /working-directory: usage-control/);
+  assert.match(workerJob, /ai-usage-rollout-handler\.ts/);
+  assert.match(workerJob, /CODEX_HOME_PATH: \$\{\{ runner\.temp \}\}\/fix-codex-home/);
+  assert.match(workerJob, /AI_USAGE_STAGE: fix/);
+  assert.match(workerJob, /AI_USAGE_JOB_NAME: worker/);
+  assert.match(workerJob, /fix-usage\/fix-usage\.json/);
+  assert.match(workerJob, /trusted FIX usage artifact 저장/);
+
+  assert.doesNotMatch(workerJob, /actions\/jobs\/.*\/logs/);
+  assert.doesNotMatch(workerJob, /path: \$\{\{ runner\.temp \}\}\/fix-codex-home/);
+});
+
 test("untrusted FIX Codex는 github-actions[bot]만 exact allowlist하고 전체 bot 허용은 금지한다", () => {
   assert.match(workerJob, /allow-bot-users: "github-actions\[bot\]"/);
   assert.doesNotMatch(workerJob, /allow-bots:\s*true/);
