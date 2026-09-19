@@ -95,19 +95,24 @@ function evidence(r: ReturnType<typeof record>): LearnEvidenceInput[] {
   ];
 }
 
-test("App/Business Evidence가 모두 없으면 improvement hypothesis를 거부한다", () => {
+test("App Runtime Evidence가 없으면 improvement hypothesis를 거부한다", () => {
   const r = record();
   const pack = createLearnInputPack(r, [evidence(r)[0]!]);
 
   assert.throws(() => createLearnReport(pack, raw(pack.packDigest, ["requirement-01"]), identity));
 });
 
-test("App Runtime Evidence만으로는 improvement hypothesis를 허용하지 않는다", () => {
+test("Business Feedback이 없으면 App Runtime Evidence만으로 기술/품질 improvement hypothesis를 허용한다", () => {
   const r = record();
   const items = evidence(r);
   const pack = createLearnInputPack(r, [items[0]!, items[1]!]);
 
-  assert.throws(() => createLearnReport(pack, raw(pack.packDigest, ["app-runtime-01"]), identity));
+  const report = createLearnReport(
+    pack,
+    raw(pack.packDigest, ["app-runtime-01"]),
+    identity,
+  );
+  assert.equal(report.improvementHypotheses.length, 1);
 });
 
 test("improvement hypothesis는 App Runtime과 Business Feedback을 모두 직접 인용해야 한다", () => {

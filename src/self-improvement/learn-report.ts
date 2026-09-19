@@ -204,20 +204,22 @@ function normalizeRawReport(raw: unknown, pack: LearnInputPack): RawLearnReport 
       .filter(({ kind }) => kind === "business-feedback")
       .map(({ evidenceId }) => evidenceId),
   );
-  if (
-    (appRuntimeEvidenceIds.size === 0 || businessFeedbackEvidenceIds.size === 0) &&
-    improvementHypotheses.length > 0
-  ) {
+  if (appRuntimeEvidenceIds.size === 0 && improvementHypotheses.length > 0) {
     throw new Error(
-      "App Runtime Evidence와 Business Feedback Evidence가 모두 있어야 improvementHypotheses를 생성할 수 있습니다",
+      "App Runtime Evidence가 있어야 improvementHypotheses를 생성할 수 있습니다",
     );
   }
   for (const hypothesis of improvementHypotheses) {
     if (!hypothesis.evidenceIds.some((id) => appRuntimeEvidenceIds.has(id))) {
       throw new Error("improvement hypothesis는 최소 하나의 app-runtime evidence를 인용해야 합니다");
     }
-    if (!hypothesis.evidenceIds.some((id) => businessFeedbackEvidenceIds.has(id))) {
-      throw new Error("improvement hypothesis는 최소 하나의 business-feedback evidence를 인용해야 합니다");
+    if (
+      businessFeedbackEvidenceIds.size > 0 &&
+      !hypothesis.evidenceIds.some((id) => businessFeedbackEvidenceIds.has(id))
+    ) {
+      throw new Error(
+        "Business Feedback Evidence가 존재하면 improvement hypothesis는 최소 하나의 business-feedback evidence를 인용해야 합니다",
+      );
     }
   }
   const uncertainties = normalizeSection("uncertainties", object.uncertainties, knownEvidenceIds);
@@ -342,24 +344,33 @@ export function createLearnReportPrompt(pack: LearnInputPack): string {
   const businessFeedbackEvidenceIds = pack.evidence
     .filter(({ kind }) => kind === "business-feedback")
     .map(({ evidenceId }) => evidenceId);
-  const hasAppImprovementEvidence =
-    appRuntimeEvidenceIds.length > 0 && businessFeedbackEvidenceIds.length > 0;
-  const appImprovementRules = hasAppImprovementEvidence
-    ? [
-        "- improvementHypotheses는 App의 업무 기능, 사용자 가치, 동작 품질 개선만 대상으로 합니다.",
-        "- Framework, workflow, CI, provenance, evidence pipeline 자체 개선은 improvementHypotheses로 제안하지 않습니다.",
-        "- 각 improvement hypothesis는 최소 하나의 app-runtime evidenceId와 최소 하나의 business-feedback evidenceId를 모두 직접 인용해야 합니다.",
-        "- Business Feedback의 불편/목표가 현재 App Runtime Evidence에서 이미 충족되면 새 개선 가설을 억지로 만들지 않습니다.",
-        "- 양쪽 evidence가 개선 필요성을 함께 뒷받침하지 않으면 improvementHypotheses를 빈 배열로 출력합니다.",
-      ]
-    : [
-        "- App Runtime Evidence와 Business Feedback Evidence가 모두 존재하지 않으므로 improvementHypotheses는 반드시 빈 배열로 출력합니다.",
-        "- 개발 과정에 대한 관찰은 lessons 또는 uncertainties에만 기록합니다.",
-      ];
+  const hasAppRuntimeEvidence = appRuntimeEvidenceIds.length > 0;
+  const hasBusinessFeedbackEvidence = businessFeedbackEvidenceIds.length > 0;
+  const appImprovementRules =
+    hasAppRuntimeEvidence && hasBusinessFeedbackEvidence
+      ? [
+          "- improvementHypotheses는 App의 업무 기능, 사용자 가치, 동작 품질 개선만 대상으로 합니다.",
+          "- Framework, workflow, CI, provenance, evidence pipeline 자체 개선은 improvementHypotheses로 제안하지 않습니다.",
+          "- 각 improvement hypothesis는 최소 하나의 app-runtime evidenceId와 최소 하나의 business-feedback evidenceId를 모두 직접 인용해야 합니다.",
+          "- Business Feedback의 불편/목표가 현재 App Runtime Evidence에서 이미 충족되면 새 개선 가설을 억지로 만들지 않습니다.",
+          "- 양쪽 evidence가 개선 필요성을 함께 뒷받침하지 않으면 improvementHypotheses를 빈 배열로 출력합니다.",
+        ]
+      : hasAppRuntimeEvidence
+        ? [
+            "- Business Feedback Evidence가 없으므로 improvementHypotheses는 App Runtime Evidence가 직접 보여주는 기술적 품질, 오류 처리, 결정성, 사용 가능성의 개선만 대상으로 합니다.",
+            "- 각 improvement hypothesis는 최소 하나의 app-runtime evidenceId를 직접 인용해야 합니다.",
+            "- 사용자 가치, 업무 효과, 만족도, 우선순위를 추정하거나 단정하지 않습니다. 해당 판단에 근거가 필요하면 uncertainties에 기록합니다.",
+            "- Framework, workflow, CI, provenance, evidence pipeline 자체 개선은 improvementHypotheses로 제안하지 않습니다.",
+            "- App Runtime Evidence가 구체적 개선 필요성을 뒷받침하지 않으면 improvementHypotheses를 빈 배열로 출력합니다.",
+          ]
+        : [
+            "- App Runtime Evidence가 없으므로 improvementHypotheses는 반드시 빈 배열로 출력합니다.",
+            "- 개발 과정에 대한 관찰은 lessons 또는 uncertainties에만 기록합니다.",
+          ];
 
   return [
     "# 역할",
-    "당신은 완료된 개발 cycle, 실제 App 동작 evidence, 실제 User/Business Feedback을 함께 분석하는 read-only AI Learner입니다.",
+    "당신은 완료된 개발 cycle과 사용 가능한 App Runtime / User/Business Evidence를 분석하는 read-only AI Learner입니다.",
     "아래 Trusted LEARN Input Pack만 근거로 사용하십시오. GitHub, repository, 웹, 다른 run/artifact를 탐색하거나 추정하지 마십시오.",
     "",
     "# 출력 규칙",
