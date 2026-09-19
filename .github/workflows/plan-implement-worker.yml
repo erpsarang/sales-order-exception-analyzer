@@ -866,9 +866,16 @@ jobs:
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
+      - name: repair 1 raw proposal artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-worker-raw-proposal-repair1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-output-repair-1/raw-proposal.json
+          if-no-files-found: error
+
       - name: repair 1 input 제거
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/repair-input-1" "$RUNNER_TEMP/worker-codex-home-repair-1"
+        run: rm -rf "$RUNNER_TEMP/repair-input-1"
 
       - name: Trusted validation checkout 1
         uses: actions/checkout@v4
@@ -887,6 +894,30 @@ jobs:
       - name: Trusted validation dependencies 설치 1
         working-directory: control-validate-1
         run: npm ci --ignore-scripts
+
+      - name: CODEX_HOME persisted bounded IMPLEMENT repair1 usage exact 기록
+        id: usage1
+        working-directory: control-validate-1
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-1
+          AI_USAGE_STAGE: bounded-implement-repair1
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: repair1
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair1.json
+
+      - name: trusted bounded IMPLEMENT repair1 usage artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage1.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/repair1.json
+          if-no-files-found: error
+
+      - name: repair1 CODEX_HOME 제거
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/worker-codex-home-repair-1"
 
       - name: Trusted handoff artifact 재다운로드 1
         uses: actions/download-artifact@v4
