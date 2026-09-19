@@ -24,6 +24,8 @@ import {
 
 export const PLAN_IMPLEMENT_HANDOFF_WORKFLOW_NAME = "Trusted PLAN IMPLEMENT Handoff" as const;
 export const PLAN_IMPLEMENT_HANDOFF_WORKFLOW_PATH = ".github/workflows/plan-implement-handoff.yml" as const;
+export const PLAN_IMPLEMENT_WORKER_WORKFLOW_NAME = "PLAN Bounded IMPLEMENT Worker" as const;
+export const PLAN_IMPLEMENT_WORKER_WORKFLOW_PATH = ".github/workflows/plan-implement-worker.yml" as const;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
