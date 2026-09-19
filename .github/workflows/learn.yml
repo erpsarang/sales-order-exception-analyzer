@@ -230,7 +230,7 @@ jobs:
           output-file: ${{ runner.temp }}/learner-output/learner.json
           model: gpt-5.6-luna
           effort: medium
-          codex-args: '["--json","-c","project_doc_max_bytes=0"]'
+          codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: Learner output 최소 구조 확인
         shell: bash
@@ -246,98 +246,12 @@ jobs:
           path: ${{ runner.temp }}/learner-output/learner.json
           if-no-files-found: error
 
-  learn_usage:
-    name: trusted LEARN usage ledger
-    needs: [prepare, learner]
-    if: >-
-      needs.prepare.result == 'success' &&
-      needs.learner.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      total_tokens: ${{ steps.usage.outputs.total_tokens }}
-      artifact_name: ${{ steps.usage.outputs.artifact_name }}
-
-    steps:
-      - name: trusted LEARN usage control-plane checkout
+      - name: trusted usage parser checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          token: ${{ github.token }}
           persist-credentials: false
-
-      - name: exact AI Learner job 선택
-        id: learner_job
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const runId = Number(process.env.GITHUB_RUN_ID);
-            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            if (!Number.isSafeInteger(runId) || runId <= 0) {
-              core.setFailed('invalid LEARN usage source run id');
-              return;
-            }
-            if (!Number.isSafeInteger(runAttempt) || runAttempt <= 0) {
-              core.setFailed('invalid LEARN usage source run attempt');
-              return;
-            }
-
-            const { data } = await github.request(
-              'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs',
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: runId,
-                attempt_number: runAttempt,
-                per_page: 100,
-              },
-            );
-            const matches = data.jobs.filter(
-              (job) =>
-                job.name === 'isolated read-only AI Learner' ||
-                job.name.endsWith(' / isolated read-only AI Learner'),
-            );
-            if (matches.length !== 1) {
-              core.setFailed(`expected one exact AI Learner job, found ${matches.length}`);
-              return;
-            }
-            const job = matches[0];
-            if (job.status !== 'completed' || job.conclusion !== 'success') {
-              core.setFailed(
-                `AI Learner job must be completed-success: status=${job.status}, conclusion=${job.conclusion}`,
-              );
-              return;
-            }
-            core.setOutput('job_id', String(job.id));
-
-      - name: completed AI Learner job log 다운로드
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LEARNER_JOB_ID: ${{ steps.learner_job.outputs.job_id }}
-          LOG_PATH: ${{ runner.temp }}/learn-job.log
-        run: |
-          set -euo pipefail
-          tmp="${LOG_PATH}.tmp"
-          rm -f "$tmp" "$LOG_PATH"
-          for attempt in 1 2 3 4 5 6; do
-            echo "AI Learner job log download attempt ${attempt}/6"
-            if gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/${GITHUB_REPOSITORY}/actions/jobs/${LEARNER_JOB_ID}/logs" \
-              > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-              mv "$tmp" "$LOG_PATH"
-              break
-            fi
-            rm -f "$tmp"
-            sleep 2
-          done
-          if [ ! -s "$LOG_PATH" ]; then
-            echo "AI Learner job log is unavailable after bounded retry" >&2
-            exit 1
-          fi
 
       - name: Node 설정
         uses: actions/setup-node@v4
@@ -348,31 +262,28 @@ jobs:
       - name: trusted usage parser 의존성 설치
         run: npm ci --ignore-scripts
 
-      - name: LEARN token usage exact 기록
+      - name: CODEX_HOME persisted LEARN usage exact 기록
         id: usage
-        run: npm exec -- tsx src/self-improvement/ai-usage-handler.ts
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
         env:
-          CODEX_JOB_LOG: ${{ runner.temp }}/learn-job.log
+          CODEX_HOME_PATH: ${{ runner.temp }}/learn-codex-home
           AI_USAGE_STAGE: learn
           AI_USAGE_RUN_ID: ${{ github.run_id }}
           AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_ID: ${{ steps.learner_job.outputs.job_id }}
-          AI_USAGE_JSON: ${{ runner.temp }}/learn-usage.json
+          AI_USAGE_JOB_NAME: learner
+          AI_USAGE_JSON: ${{ runner.temp }}/learn-usage/learn-usage.json
 
       - name: trusted LEARN usage artifact 저장
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/learn-usage.json
+          path: ${{ runner.temp }}/learn-usage/learn-usage.json
           if-no-files-found: error
 
   finalize:
     name: trusted LEARN report 검증
-    needs: [prepare, learner, learn_usage]
-    if: >-
-      needs.prepare.result == 'success' &&
-      needs.learner.result == 'success' &&
-      needs.learn_usage.result == 'success'
+    needs: [prepare, learner]
+    if: needs.prepare.result == 'success' && needs.learner.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
