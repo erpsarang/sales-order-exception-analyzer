@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  PLAN_IMPLEMENT_CODEX_ACTION_PIN,
+  PLAN_IMPLEMENT_CODEX_ARGS,
+  PLAN_IMPLEMENT_CODEX_EFFORT,
+} from "../src/self-improvement/plan-implement-worker.js";
 
 const workflow = readFileSync(".github/workflows/plan-implement-worker.yml", "utf8");
 
@@ -74,4 +79,32 @@ test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Wor
   assert.match(workflow, /run-id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
   assert.match(workflow, /run-id: \$\{\{ needs\.attempt0\.outputs\.source_run_id \}\}/);
   assert.match(workflow, /run-id: \$\{\{ needs\.attempt0_result\.outputs\.source_run_id \}\}/);
+});
+
+
+test("동일 direct PASS bounded IMPLEMENT는 ledger로 Codex 재호출을 차단한다", () => {
+  assert.ok(workflow.includes(`uses: openai/codex-action@${PLAN_IMPLEMENT_CODEX_ACTION_PIN}`));
+  assert.ok(workflow.includes(`effort: ${PLAN_IMPLEMENT_CODEX_EFFORT}`));
+  assert.ok(workflow.includes(`codex-args: '${PLAN_IMPLEMENT_CODEX_ARGS}'`));
+  assert.match(workflow, /ai_call_id: \$\{\{ steps\.prepare\.outputs\.ai_call_id \}\}/);
+  assert.match(workflow, /reused: \$\{\{ steps\.prepare\.outputs\.reuse_candidate \}\}/);
+  assert.match(workflow, /name: 동일 AI call 성공 candidate 다운로드/);
+  assert.match(workflow, /name: 재사용 candidate trusted rebind/);
+  assert.match(workflow, /plan-implement-worker-handler\.ts reuse/);
+  assert.match(
+    workflow,
+    /name: Untrusted bounded IMPLEMENT Worker[\s\S]*if: steps\.source\.outputs\.should_run == 'true' && steps\.prepare\.outputs\.reuse_candidate != 'true'/,
+  );
+  assert.match(workflow, /CANDIDATE_OUTPUT_DIRECTORY: \$\{\{ runner\.temp \}\}\/validated-candidate-0/);
+  assert.match(workflow, /name: deterministic CI 및 repair 입력 준비 0/);
+  assert.match(workflow, /name: direct PASS AI call ledger 생성/);
+  assert.match(workflow, /needs\.attempt0_result\.outputs\.ci_status == 'PASS'/);
+  assert.match(workflow, /needs\.attempt0_result\.outputs\.reused != 'true'/);
+  assert.match(workflow, /needs\.attempt0_result\.outputs\.retry_required != 'true'/);
+  assert.match(workflow, /name: bounded-worker-ai-call-\$\{\{ needs\.attempt0_result\.outputs\.ai_call_id \}\}/);
+
+  const repair1 = workflow.slice(workflow.indexOf("\n  repair1:\n"), workflow.indexOf("\n  repair2:\n"));
+  const repair2 = workflow.slice(workflow.indexOf("\n  repair2:\n"), workflow.indexOf("\n  finalize:\n"));
+  assert.doesNotMatch(repair1, /reuse_candidate/);
+  assert.doesNotMatch(repair2, /reuse_candidate/);
 });
