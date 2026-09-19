@@ -218,6 +218,53 @@ function fileRolePriority(path: string): number {
   return 4;
 }
 
+function npmRunScriptNames(requirement: string): string[] {
+  const names: string[] = [];
+  for (const match of requirement.matchAll(/\bnpm\s+run\s+([A-Za-z0-9:_-]{1,80})\b/g)) {
+    const name = match[1]!;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function packageScriptPathAnchors<T extends { path: string; text: string }>(
+  requirement: string,
+  candidates: readonly T[],
+): string[] {
+  const packageCandidate = candidates.find((candidate) => candidate.path === "package.json");
+  if (!packageCandidate) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(packageCandidate.text);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  const scripts = (parsed as Record<string, unknown>).scripts;
+  if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) return [];
+
+  const candidatePaths = new Set(candidates.map((candidate) => candidate.path));
+  const result: string[] = [];
+  for (const scriptName of npmRunScriptNames(requirement)) {
+    const command = (scripts as Record<string, unknown>)[scriptName];
+    if (typeof command !== "string") continue;
+    for (const match of command.matchAll(/(?:^|[\s"'\`])((?:\.\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\.(?:[cm]?[jt]sx?|json))(?:$|[\s"'\`])/g)) {
+      const raw = match[1]!;
+      const path = raw.startsWith("./") ? raw.slice(2) : raw;
+      if (
+        isAbsolute(path) ||
+        path.includes("\\") ||
+        path.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ||
+        !candidatePaths.has(path) ||
+        fileRolePriority(path) !== 0
+      ) continue;
+      if (!result.includes(path)) result.push(path);
+    }
+  }
+  return result;
+}
+
 function modulePathIdentity(path: string): string {
   return path.replace(/\\/g, "/").replace(/\.(?:[cm]?[jt]sx?)$/i, "");
 }
@@ -253,6 +300,7 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
   maxFiles: number,
   anchors: readonly string[],
   pathAnchors: readonly string[],
+  scriptPathAnchors: readonly string[],
 ): T[] {
   const positive = candidates.filter((candidate) => candidate.score > 0);
   const fallback = positive.length > 0 ? positive : [...candidates];
@@ -267,11 +315,17 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
   for (const path of pathAnchors) {
     add(candidates.find((candidate) => candidate.path === path));
   }
+  for (const path of scriptPathAnchors) {
+    add(candidates.find((candidate) => candidate.path === path));
+  }
 
   const explicitRuntime = pathAnchors
     .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
     .find((candidate): candidate is T => candidate !== undefined);
-  const primaryRuntime = explicitRuntime ?? fallback.find((entry) => fileRolePriority(entry.path) === 0);
+  const scriptRuntime = scriptPathAnchors
+    .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
+    .find((candidate): candidate is T => candidate !== undefined);
+  const primaryRuntime = explicitRuntime ?? scriptRuntime ?? fallback.find((entry) => fileRolePriority(entry.path) === 0);
   const primaryDirectTest = primaryRuntime
     ? candidates.find((candidate) => directTestImportsSource(candidate.path, candidate.text, primaryRuntime.path))
     : undefined;
@@ -343,7 +397,8 @@ export function selectPlanContext(
   }).filter((value): value is { path: string; text: string; score: number } => value !== null);
 
   candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
-  const ranked = diverseRankedCandidates(candidates, maxFiles, anchors, pathAnchors);
+  const scriptPathAnchors = packageScriptPathAnchors(requirement, candidates);
+  const ranked = diverseRankedCandidates(candidates, maxFiles, anchors, pathAnchors, scriptPathAnchors);
 
   const files: PlanContextFile[] = [];
   let totalBytes = 0;
