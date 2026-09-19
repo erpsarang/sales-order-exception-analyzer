@@ -125,7 +125,7 @@ test("FIX usage는 snapshot 보존 뒤 exact trusted control-plane에서 same-jo
   assert.ok(usageCheckoutIndex > snapshotIndex);
   assert.ok(usageParseIndex > usageCheckoutIndex);
 
-  assert.match(workerJob, /ref: \$\{\{ needs\.prepare\.outputs\.trusted_code_sha \}\}/);
+  assert.match(workerJob, /ref: \$\{\{ needs\.prepare\.outputs\.source_control_plane_sha \}\}/);
   assert.match(workerJob, /path: usage-control/);
   assert.match(workerJob, /token: \$\{\{ github\.token \}\}/);
   assert.match(workerJob, /working-directory: usage-control/);
