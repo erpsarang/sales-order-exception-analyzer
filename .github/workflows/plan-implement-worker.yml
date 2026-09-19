@@ -356,6 +356,54 @@ jobs:
             ${{ runner.temp }}/plan-worker-input/schema.json
           if-no-files-found: error
 
+      - name: Trusted attempt0 timeout usage checkout
+        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          path: control-timeout-usage-0
+
+      - name: Trusted attempt0 timeout usage dependencies 설치
+        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
+        working-directory: control-timeout-usage-0
+        run: npm ci --ignore-scripts
+
+      - name: CODEX_HOME persisted bounded IMPLEMENT attempt0 timeout usage 관찰
+        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
+        id: timeout_usage0
+        working-directory: control-timeout-usage-0
+        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home
+          AI_USAGE_STAGE: bounded-implement-attempt0
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: attempt0
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
+          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/attempt0-timeout.json
+
+      - name: trusted bounded IMPLEMENT attempt0 timeout usage artifact 저장
+        if: steps.timeout_usage0.outputs.status == 'recorded'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.timeout_usage0.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
+          if-no-files-found: error
+
+      - name: trusted bounded IMPLEMENT attempt0 timeout usage unavailable observation 저장
+        if: steps.timeout_usage0.outputs.status == 'unavailable'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.timeout_usage0.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage-observation/attempt0-timeout.json
+          if-no-files-found: error
+
+      - name: attempt0 timeout CODEX_HOME 제거
+        if: always() && steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/worker-codex-home"
+
       - name: attempt0 raw proposal artifact 저장
         if: >-
           steps.source.outputs.should_run == 'true' &&
