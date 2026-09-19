@@ -170,3 +170,50 @@ test("요구에 명시된 여러 exact path는 lexical noise보다 먼저 budget
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("요구의 npm run script가 가리키는 runtime entrypoint와 direct test를 Context Pack에 예약한다", () => {
+  const root = mkdtempSync(join(tmpdir(), "planner-npm-script-"));
+  try {
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "test"));
+
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      scripts: {
+        analyze: "node --import tsx src/order-analysis-cli.ts",
+      },
+    }));
+    writeFileSync(
+      join(root, "src", "order-analysis-cli.ts"),
+      "export async function runOrderAnalysisCli() { return '분석'; }\n",
+    );
+    writeFileSync(
+      join(root, "test", "order-analysis-cli.test.ts"),
+      "import { runOrderAnalysisCli } from '../src/order-analysis-cli.js';\nvoid runOrderAnalysisCli;\n",
+    );
+    writeFileSync(
+      join(root, "src", "analysis-noise.ts"),
+      "analyze csv orders output exception analyze csv orders output exception\n".repeat(100),
+    );
+    writeFileSync(
+      join(root, "test", "analysis-noise.test.ts"),
+      "analyze csv orders output exception\n".repeat(100),
+    );
+
+    const pack = selectPlanContext(
+      "기존 `npm run analyze -- orders.json`는 유지하고 `--csv` 옵션을 추가한다.",
+      root,
+      "example/orders",
+      "f".repeat(40),
+      { maxFiles: 3, maxBytes: 12_000, maxFileBytes: 4_000 },
+    );
+    const paths = pack.files.map((file) => file.path);
+
+    assert.ok(paths.includes("src/order-analysis-cli.ts"), `missing script entrypoint: ${paths.join(", ")}`);
+    assert.ok(paths.includes("test/order-analysis-cli.test.ts"), `missing direct CLI test: ${paths.join(", ")}`);
+    assert.ok(paths.includes("package.json"), `missing package script contract: ${paths.join(", ")}`);
+    assert.ok(!paths.includes("src/analysis-noise.ts"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
