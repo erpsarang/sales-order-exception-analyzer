@@ -28,6 +28,11 @@ export const PLAN_IMPLEMENT_HANDOFF_WORKFLOW_PATH = ".github/workflows/plan-impl
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
 
+export const PLAN_IMPLEMENT_AI_CALL_STAGE = "plan-bounded-implement-attempt0-v1" as const;
+export const PLAN_IMPLEMENT_CODEX_ACTION_PIN = "52fe01ec70a42f454c9d2ebd47598f9fd6893d56" as const;
+export const PLAN_IMPLEMENT_CODEX_EFFORT = "low" as const;
+export const PLAN_IMPLEMENT_CODEX_ARGS = '["-c","project_doc_max_bytes=0"]' as const;
+
 export interface HandoffArtifactMetadata {
   readonly name: string;
   readonly id: number;
@@ -215,6 +220,47 @@ export function validatePlanImplementWorkerSource(
   if (sourceArtifact.name !== planImplementHandoffArtifactName(bundle.authorization)) {
     throw new Error("source handoff artifact name mismatch");
   }
+}
+
+export function planImplementAiCallId(input: {
+  readonly bundle: PlanImplementWorkerBundle;
+  readonly source: PlanImplementWorkerSourceRun;
+  readonly sourceArtifact: HandoffArtifactMetadata;
+}): string {
+  positiveInteger("source handoff run id", input.source.id);
+  positiveInteger("source handoff run attempt", input.source.runAttempt);
+  positiveInteger("source handoff artifact id", input.sourceArtifact.id);
+  assertDigest("source handoff artifact digest", input.sourceArtifact.digest);
+
+  const promptDigest = createHash("sha256").update(input.bundle.prompt, "utf8").digest("hex");
+  const schemaDigest = createHash("sha256").update(JSON.stringify(WORKER_OUTPUT_SCHEMA), "utf8").digest("hex");
+  const payload = {
+    schemaVersion: 1,
+    kind: "plan-bounded-implement-ai-call",
+    stage: PLAN_IMPLEMENT_AI_CALL_STAGE,
+    repository: input.bundle.contract.repository,
+    issueNumber: input.bundle.authorization.requirement.issueNumber,
+    baseSha: input.bundle.contract.baseSha,
+    sourceHandoff: {
+      runId: input.source.id,
+      runAttempt: input.source.runAttempt,
+      artifact: { ...input.sourceArtifact },
+    },
+    contractDigest: input.bundle.contract.contractDigest,
+    contextDigest: input.bundle.context.contextDigest,
+    handoffDigest: input.bundle.handoff.handoffDigest,
+    promptDigest,
+    schemaDigest,
+    actionPin: PLAN_IMPLEMENT_CODEX_ACTION_PIN,
+    effort: PLAN_IMPLEMENT_CODEX_EFFORT,
+    codexArgs: PLAN_IMPLEMENT_CODEX_ARGS,
+  };
+  return createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+}
+
+export function workerAiCallLedgerArtifactName(aiCallId: string): string {
+  assertDigest("AI call id", aiCallId);
+  return `bounded-worker-ai-call-${aiCallId}`;
 }
 
 export function workerCandidateArtifactName(input: {
