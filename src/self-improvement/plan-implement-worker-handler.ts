@@ -129,7 +129,6 @@ interface ReusableAttempt0Candidate {
 async function findReusableAttempt0Candidate(
   bundle: PlanImplementWorkerBundle,
   source: PlanImplementWorkerSourceRun,
-  sourceArtifact: HandoffArtifactMetadata,
   aiCallId: string,
 ): Promise<ReusableAttempt0Candidate | undefined> {
   const { owner, repo } = repositoryParts();
@@ -264,7 +263,7 @@ async function prepare(): Promise<void> {
   const workerRunId = positiveInteger("WORKER_RUN_ID");
   const workerRunAttempt = positiveInteger("WORKER_RUN_ATTEMPT");
   const aiCallId = planImplementAiCallId({ bundle, source, sourceArtifact });
-  const reusable = await findReusableAttempt0Candidate(bundle, source, sourceArtifact, aiCallId);
+  const reusable = await findReusableAttempt0Candidate(bundle, source, aiCallId);
 
   output("ai_call_id", aiCallId);
   output("ai_call_ledger_name", workerAiCallLedgerArtifactName(aiCallId));
