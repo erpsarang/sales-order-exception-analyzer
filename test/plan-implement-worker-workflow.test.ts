@@ -240,6 +240,39 @@ test("bounded IMPLEMENT repair1 usage는 raw proposal 보존 뒤 trusted same-jo
   assert.doesNotMatch(inputCleanup, /worker-codex-home-repair-1/);
 });
 
+test("bounded IMPLEMENT repair2 실패는 usage 관찰 뒤 명시적으로 fail-closed한다", () => {
+  const repair2 = workflow.slice(workflow.indexOf("\n  repair2:\n"), workflow.indexOf("\n  finalize:\n"));
+  const actionIndex = repair2.indexOf("Untrusted bounded IMPLEMENT repair 2");
+  const checkoutIndex = repair2.indexOf("Trusted validation checkout 2");
+  const observeIndex = repair2.indexOf("CODEX_HOME persisted bounded IMPLEMENT repair2 failure usage 관찰");
+  const recordedIndex = repair2.indexOf("trusted bounded IMPLEMENT repair2 failure usage artifact 저장");
+  const unavailableIndex = repair2.indexOf("trusted bounded IMPLEMENT repair2 failure usage unavailable observation 저장");
+  const cleanupIndex = repair2.indexOf("repair2 CODEX_HOME 제거");
+  const gateIndex = repair2.indexOf("repair2 실행 결과 확인");
+  const candidateIndex = repair2.indexOf("Trusted candidate 검증 2");
+
+  assert.ok(actionIndex >= 0);
+  assert.ok(checkoutIndex > actionIndex);
+  assert.ok(observeIndex > checkoutIndex);
+  assert.ok(recordedIndex > observeIndex);
+  assert.ok(unavailableIndex > recordedIndex);
+  assert.ok(cleanupIndex > unavailableIndex);
+  assert.ok(gateIndex > cleanupIndex);
+  assert.ok(candidateIndex > gateIndex);
+
+  assert.match(repair2, /id: implement_repair2[\s\S]*continue-on-error: true[\s\S]*timeout-minutes: 4/);
+  assert.match(repair2, /repair 2 raw proposal artifact 저장[\s\S]*if: steps\.implement_repair2\.outcome == 'success'/);
+  assert.match(repair2, /CODEX_HOME persisted bounded IMPLEMENT repair2 usage exact 기록[\s\S]*if: steps\.implement_repair2\.outcome == 'success'/);
+  assert.match(repair2, /CODEX_HOME persisted bounded IMPLEMENT repair2 failure usage 관찰[\s\S]*if: steps\.implement_repair2\.outcome == 'failure'/);
+  assert.match(repair2, /ai-usage-timeout-observation-handler\.ts/);
+  assert.match(repair2, /AI_USAGE_STAGE: bounded-implement-repair2/);
+  assert.match(repair2, /AI_USAGE_JOB_NAME: repair2/);
+  assert.match(repair2, /bounded-implement-usage-observation\/repair2-failure\.json/);
+  assert.match(repair2, /REPAIR2_OUTCOME: \$\{\{ steps\.implement_repair2\.outcome \}\}/);
+  assert.match(repair2, /bounded IMPLEMENT repair2 failed after usage observation/);
+  assert.doesNotMatch(repair2, /actions\/jobs\/.*\/logs/);
+});
+
 test("bounded IMPLEMENT repair2 usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
   const repair2 = workflow.slice(workflow.indexOf("\n  repair2:\n"), workflow.indexOf("\n  finalize:\n"));
   const rawIndex = repair2.indexOf("repair 2 raw proposal artifact 저장");
