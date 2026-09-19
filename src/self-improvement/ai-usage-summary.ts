@@ -139,7 +139,14 @@ export function summarizeBoundedImplementRecordedUsage(input: {
   const runAttempt = positiveSafeInteger("runAttempt", input.runAttempt);
   const allowed = new Set<string>(BOUNDED_IMPLEMENT_RECORDED_STAGES);
   const seen = new Set<string>();
-  const totals: CodexTokenUsage = {
+  const totals: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteInputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+    totalTokens: number;
+  } = {
     inputTokens: 0,
     cachedInputTokens: 0,
     cacheWriteInputTokens: 0,
