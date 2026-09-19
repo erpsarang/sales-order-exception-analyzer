@@ -4,6 +4,7 @@ const GIT_SHA = /^[0-9a-f]{40,64}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 export const PLAN_WORKFLOW_PATH = ".github/workflows/plan.yml" as const;
+export const MAX_AUTO_REPLAN_PER_AUTHORIZATION = 2 as const;
 
 export type PlanRecoveryReason =
   | "NONE"
@@ -26,10 +27,32 @@ export interface PlanRecoveryDecision {
   readonly reason: PlanRecoveryReason;
 }
 
+function validAuthorizationDigest(value: string): void {
+  if (!SHA256.test(value)) throw new Error("authorization digest is invalid");
+}
+
+export function planRecoveryAuthorizationMarkerPrefix(authorizationDigest: string): string {
+  validAuthorizationDigest(authorizationDigest);
+  return `<!-- self-improvement:AUTO_REPLAN authorization-digest=${authorizationDigest}`;
+}
+
 export function planRecoveryMarker(authorizationDigest: string, currentDefaultSha: string): string {
-  if (!SHA256.test(authorizationDigest)) throw new Error("authorization digest is invalid");
+  validAuthorizationDigest(authorizationDigest);
   validSha("current default SHA", currentDefaultSha);
-  return `<!-- self-improvement:AUTO_REPLAN authorization-digest=${authorizationDigest} target-sha=${currentDefaultSha} -->`;
+  return `${planRecoveryAuthorizationMarkerPrefix(authorizationDigest)} target-sha=${currentDefaultSha} -->`;
+}
+
+export function planRecoveryBudgetStopMarker(authorizationDigest: string): string {
+  validAuthorizationDigest(authorizationDigest);
+  return `<!-- self-improvement:AUTO_REPLAN_STOP authorization-digest=${authorizationDigest} -->`;
+}
+
+export function countAutomaticPlanRecoveries(
+  commentBodies: readonly string[],
+  authorizationDigest: string,
+): number {
+  const prefix = planRecoveryAuthorizationMarkerPrefix(authorizationDigest);
+  return commentBodies.filter((body) => body.includes(prefix)).length;
 }
 
 function validSha(name: string, value: string): void {
