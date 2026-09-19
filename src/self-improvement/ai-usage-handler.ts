@@ -38,6 +38,7 @@ writeFileSync(requiredEnv("AI_USAGE_JSON"), `${JSON.stringify(record, null, 2)}\
 
 writeOutput("input_tokens", usage.inputTokens);
 writeOutput("cached_input_tokens", usage.cachedInputTokens);
+writeOutput("cache_write_input_tokens", usage.cacheWriteInputTokens);
 writeOutput("output_tokens", usage.outputTokens);
 writeOutput("reasoning_output_tokens", usage.reasoningOutputTokens);
 writeOutput("total_tokens", usage.totalTokens);
