@@ -11,6 +11,7 @@ import {
   workerCandidateArtifactName,
   type HandoffArtifactMetadata,
   type PlanImplementWorkerBundle,
+  type PlanImplementWorkerRecoveryGuard,
   type PlanImplementWorkerSourceRun,
 } from "./plan-implement-worker.js";
 
@@ -29,6 +30,22 @@ function required(name: string): string {
   return value;
 }
 
+const RECOVERY_SHA = /^[0-9a-f]{40,64}$/;
+
+function selectedRecoveryGuard(): PlanImplementWorkerRecoveryGuard | undefined {
+  const kind = process.env.RECOVERY_GUARD_KIND?.trim() ?? "";
+  const baseSha = process.env.RECOVERY_BASE_SHA?.trim() ?? "";
+  const currentDefaultSha = process.env.RECOVERY_CURRENT_SHA?.trim() ?? "";
+  if (!kind && !baseSha && !currentDefaultSha) return undefined;
+  if (
+    kind !== "trusted-recovery-compare-v1" ||
+    !RECOVERY_SHA.test(baseSha) ||
+    !RECOVERY_SHA.test(currentDefaultSha)
+  ) {
+    throw new Error("invalid recovery guard");
+  }
+  return { kind, baseSha, currentDefaultSha };
+}
 function positiveInteger(name: string): number {
   const value = Number(required(name));
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
@@ -144,7 +161,7 @@ async function validateLiveSource(
     throw new Error("source handoff artifact identity mismatch");
   }
 
-  validatePlanImplementWorkerSource(bundle, source, selectedArtifact);
+  validatePlanImplementWorkerSource(bundle, source, selectedArtifact, selectedRecoveryGuard());
   return source;
 }
 
