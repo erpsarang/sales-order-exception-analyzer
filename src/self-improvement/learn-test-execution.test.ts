@@ -356,7 +356,7 @@ test("LEARN FIX cycle은 최초 PLAN validation을 최종 FIX test-execution으�
   verifyLearnInputPack(result.learnInputPack, result.completedCycle);
   assert.equal(result.learnInputPack.evidence.some(e => e.kind === "test-execution"), false);
   assert.equal(result.learnInputPack.evidence.some(e => e.kind === "final-review"), true);
-  assert.equal(result.learnInputPack.evidence.some(e => e.kind === "orchestration"), true);
+  assert.equal(result.learnInputPack.evidence.some(e => e.kind === "orchestration-summary"), true);
 });
 
 test("LEARN does not invent execution evidence when provenance is absent", () => {
