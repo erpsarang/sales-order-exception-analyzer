@@ -72,6 +72,9 @@ test("provenance의 사용자/Human/Issue 문구만으로 human-output context�
 test("실제 human-facing 출력 동사가 있을 때만 human-output context를 활성화한다", () => {
   assert.equal(needsHumanOutputPlanContext("사용자에게 현재 처리 상태를 표시한다."), true);
   assert.equal(needsHumanOutputPlanContext("사람이 이해할 수 있도록 다음 행동을 안내한다."), true);
+  assert.equal(needsHumanOutputPlanContext("Issue에 승인 결과 코멘트를 남긴다."), true);
   assert.equal(needsHumanOutputPlanContext("Add a human-facing message with the next action."), true);
   assert.equal(needsHumanOutputPlanContext("The Issue stores status and summary fields."), false);
+  assert.equal(needsHumanOutputPlanContext("주문 코멘트를 데이터 모델에 보존한다."), false);
+  assert.equal(needsHumanOutputPlanContext("Preserve the order comment field in the model."), false);
 });
