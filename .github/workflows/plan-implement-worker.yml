@@ -1062,6 +1062,7 @@ jobs:
     if: always() && needs.attempt0_result.outputs.should_run == 'true'
     permissions:
       actions: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -1148,6 +1149,58 @@ jobs:
           echo "AI repair blocked by deterministic repair policy: attempt0=${ATTEMPT0_REASON}, attempt1=${ATTEMPT1_REASON}" >&2
           exit 1
 
+      - name: INFRA_FAILURE stalled cycle 기록
+        if: >-
+          needs.attempt0_result.outputs.infrastructure_failed == 'true' ||
+          needs.repair1.result == 'failure' ||
+          needs.repair2.result == 'failure'
+        uses: actions/github-script@v7
+        env:
+          SOURCE_HANDOFF_RUN_ID: ${{ needs.attempt0_result.outputs.source_run_id }}
+          SOURCE_HANDOFF_RUN_ATTEMPT: ${{ needs.attempt0_result.outputs.source_run_attempt }}
+          SOURCE_HANDOFF_ARTIFACT: ${{ needs.attempt0_result.outputs.source_name }}
+          APPROVED_BASE_SHA: ${{ needs.attempt0_result.outputs.base_sha }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+          WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const artifact = process.env.SOURCE_HANDOFF_ARTIFACT || '';
+            const match = /^plan-implement-handoff-issue-(\d+)-plan-\d+-attempt-\d+-approval-\d+$/.exec(artifact);
+            if (!match) {
+              core.setFailed(`cannot derive issue from Handoff artifact: ${artifact}`);
+              return;
+            }
+            const issueNumber = Number(match[1]);
+            const handoffRunId = Number(process.env.SOURCE_HANDOFF_RUN_ID);
+            const handoffRunAttempt = Number(process.env.SOURCE_HANDOFF_RUN_ATTEMPT);
+            const workerRunId = Number(process.env.WORKER_RUN_ID);
+            const workerRunAttempt = Number(process.env.WORKER_RUN_ATTEMPT);
+            const baseSha = process.env.APPROVED_BASE_SHA || '';
+            if (![issueNumber, handoffRunId, handoffRunAttempt, workerRunId, workerRunAttempt].every(Number.isSafeInteger) ||
+                !/^[0-9a-f]{40,64}$/.test(baseSha)) {
+              core.setFailed('invalid stalled cycle identity');
+              return;
+            }
+            const marker =
+              `<!-- ai-dev-framework:STALLED_WORKER issue=${issueNumber} handoff-run=${handoffRunId} handoff-attempt=${handoffRunAttempt} artifact=${artifact} base-sha=${baseSha} worker-run=${workerRunId} worker-attempt=${workerRunAttempt} reason=INFRA_FAILURE -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            if (!comments.some((comment) => (comment.body || '').includes(marker))) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: [
+                  marker,
+                  '## Worker 일시 중단 — INFRA_FAILURE',
+                  '업무 candidate가 생성되기 전에 infrastructure failure로 중단되었습니다.',
+                  'Framework-only fix가 Merge되면 exact Handoff/provenance를 재검증한 뒤 자동 Resume 대상이 됩니다.',
+                ].join('\n\n'),
+              });
+            }
+
       - name: upstream infrastructure failure 시 fail-closed
         if: >-
           needs.attempt0_result.outputs.infrastructure_failed == 'true' ||
@@ -1180,3 +1233,52 @@ jobs:
             ${{ runner.temp }}/final-candidate/candidate.json
             ${{ runner.temp }}/final-candidate/candidate-provenance.json
           if-no-files-found: error
+
+  recovery_bridge_dispatch:
+    needs: [attempt0_result, finalize]
+    if: >-
+      always() &&
+      needs.attempt0_result.outputs.recovery == 'true' &&
+      needs.finalize.result == 'success' &&
+      (needs.attempt0_result.outputs.ci_status == 'PASS' ||
+       needs.repair1.outputs.ci_status == 'PASS' ||
+       needs.repair2.outputs.ci_status == 'PASS')
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: recovery candidate를 explicit Bridge로 전달
+        uses: actions/github-script@v7
+        env:
+          SOURCE_WORKER_RUN_ID: ${{ github.run_id }}
+          SOURCE_WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_CANDIDATE_ARTIFACT: ${{ needs.attempt0_result.outputs.candidate_artifact_name }}
+          SOURCE_WORKER_BASE_SHA: ${{ needs.attempt0_result.outputs.base_sha }}
+        with:
+          script: |
+            const runId = Number(process.env.SOURCE_WORKER_RUN_ID);
+            const runAttempt = Number(process.env.SOURCE_WORKER_RUN_ATTEMPT);
+            const artifact = process.env.SOURCE_CANDIDATE_ARTIFACT;
+            const baseSha = process.env.SOURCE_WORKER_BASE_SHA;
+            if (!Number.isSafeInteger(runId) || runId <= 0 ||
+                !Number.isSafeInteger(runAttempt) || runAttempt <= 0 ||
+                typeof artifact !== 'string' || !artifact ||
+                !/^[0-9a-f]{40,64}$/.test(baseSha || '')) {
+              core.setFailed('invalid recovery Bridge dispatch identity');
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'plan-candidate-bridge.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                source_worker_run_id: String(runId),
+                source_worker_run_attempt: String(runAttempt),
+                source_candidate_artifact_name: artifact,
+                source_worker_base_sha: baseSha,
+              },
+            });
+            core.info(`dispatched recovery Candidate Bridge for Worker ${runId}/${runAttempt}`);
+
