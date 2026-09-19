@@ -30,9 +30,6 @@ const baseOrder: Readonly<OrderInput> = Object.freeze({
   availableQuantity: 20,
   customerBlocked: false,
   materialBlocked: false,
-  estimatedAmount: 1250000,
-  dueDate: "2026-10-15",
-  orderComment: "오전 입고 요청",
 });
 
 function scenario(
@@ -72,7 +69,12 @@ export function createAppRuntimeEvidence(
       "mixed-exceptions",
       "정상 주문과 서로 다른 예외 사유가 함께 있는 batch",
       [
-        baseOrder,
+        {
+          ...baseOrder,
+          estimatedAmount: 1250000,
+          dueDate: "2026-10-15",
+          orderComment: "오전 입고 요청",
+        },
         { ...baseOrder, orderId: "SO-INVALID", orderQuantity: 0 },
         { ...baseOrder, orderId: "SO-CUSTOMER", customerBlocked: true },
         { ...baseOrder, orderId: "SO-STOCK", availableQuantity: 1 },
@@ -93,7 +95,14 @@ export function createAppRuntimeEvidence(
       "duplicate-exception-id",
       "동일 주문 ID의 예외 입력이 반복되는 batch",
       [
-        { ...baseOrder, orderId: "SO-DUP", customerBlocked: true },
+        {
+          ...baseOrder,
+          orderId: "SO-DUP",
+          customerBlocked: true,
+          estimatedAmount: 1250000,
+          dueDate: "2026-10-15",
+          orderComment: "오전 입고 요청",
+        },
         {
           ...baseOrder,
           orderId: "SO-DUP",

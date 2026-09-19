@@ -346,6 +346,7 @@ test("여섯 업무 상세 값을 보존하며 중복 ID도 입력 항목별로 
       },
       status: "SHIP_READY",
       reasonCodes: [],
+      exceptionGuides: [],
     },
     {
       orderId: "SO-003",
@@ -359,6 +360,11 @@ test("여섯 업무 상세 값을 보존하며 중복 ID도 입력 항목별로 
       },
       status: "EXCEPTION",
       reasonCodes: ["CUSTOMER_BLOCKED"],
+      exceptionGuides: [{
+        reasonCode: "CUSTOMER_BLOCKED",
+        check: "고객 차단 사유와 해제 요건 확인",
+        action: "해제 가능 여부 확인 후 주문 재분석",
+      }],
     },
   ]);
   assert.deepEqual(summary.exceptionOrderIds, ["SO-003"]);
@@ -657,4 +663,76 @@ test("빈 입력과 정상 주문만 있는 입력의 우선순위 배열은 비
   for (const batch of batches.slice(1)) assert.deepEqual(batch.exceptionPriorities, []);
   assert.deepEqual(analyzeOrderBatch([]).exceptionPriorities, []);
   assert.deepEqual(analyzeOrderBatch([normalOrder]).exceptionPriorities, []);
+});
+
+test("배치는 모든 사유의 전체 가이드를 단일 주문 결과와 동일하게 전달한다", () => {
+  const orders = [
+    normalOrder,
+    ...singleReasonCases.map(({ overrides }) => ({ ...normalOrder, ...overrides })),
+    exceptionOrder,
+  ];
+  const batch = analyzeOrderBatch(orders);
+  orders.forEach((order, index) => {
+    const result = batch.results[index]!;
+    const expected = analyzeOrder(order);
+    assert.deepEqual(result.exceptionGuides, expected.exceptionGuides);
+    assert.deepEqual(result.exceptionGuides.map(({ reasonCode }) => reasonCode), result.reasonCodes);
+    assert.equal(result.exceptionGuides.length, result.reasonCodes.length);
+    assert.notStrictEqual(result.exceptionGuides, expected.exceptionGuides);
+    result.exceptionGuides.forEach((guide, guideIndex) => {
+      assert.notStrictEqual(guide, expected.exceptionGuides[guideIndex]);
+      assert.ok(guide.check.length > 0);
+      assert.ok(guide.action.length > 0);
+    });
+  });
+});
+
+test("중복 예외 항목과 반복 호출의 가이드 배열 및 객체는 독립적이다", () => {
+  const orders = Object.freeze([exceptionOrder, exceptionOrder, Object.freeze({ ...exceptionOrder })]);
+  const snapshot = orders.map((order) => ({ ...order }));
+  const first = analyzeOrderBatch(orders);
+  const second = analyzeOrderBatch(orders);
+  const results = [...first.results, ...second.results];
+  results.forEach((result, index) => {
+    assert.deepEqual(result.exceptionGuides, analyzeOrder(exceptionOrder).exceptionGuides);
+    for (const other of results.slice(index + 1)) {
+      assert.notStrictEqual(result.exceptionGuides, other.exceptionGuides);
+    }
+  });
+  const guides = results.flatMap(({ exceptionGuides }) => exceptionGuides);
+  guides.forEach((guide, index) => {
+    for (const other of guides.slice(index + 1)) assert.notStrictEqual(guide, other);
+  });
+  first.results[0]!.exceptionGuides.forEach((guide) => {
+    guide.reasonCode = "INVALID_QUANTITY";
+    guide.check = "변경";
+    guide.action = "변경";
+  });
+  first.results[0]!.exceptionGuides.length = 0;
+  for (const result of results.slice(1)) {
+    assert.deepEqual(result.exceptionGuides, analyzeOrder(exceptionOrder).exceptionGuides);
+  }
+  assert.deepEqual(first.results[0]!.reasonCodes, reasonCodeOrder);
+  assert.deepEqual(first.summary, second.summary);
+  assert.deepEqual(first.exceptionPriorities, second.exceptionPriorities);
+  assert.deepEqual(analyzeOrderBatch(orders), second);
+  assert.deepEqual(orders, snapshot);
+});
+
+test("중복 정상 항목과 반복 호출의 빈 가이드 배열도 독립적이다", () => {
+  const orders = [normalOrder, normalOrder];
+  const first = analyzeOrderBatch(orders);
+  const second = analyzeOrderBatch(orders);
+  const results = [...first.results, ...second.results];
+  results.forEach((result, index) => {
+    assert.deepEqual(result.exceptionGuides, []);
+    for (const other of results.slice(index + 1)) {
+      assert.notStrictEqual(result.exceptionGuides, other.exceptionGuides);
+    }
+  });
+  first.results[0]!.exceptionGuides.push({
+    reasonCode: "CUSTOMER_BLOCKED", check: "변경", action: "변경",
+  });
+  for (const result of results.slice(1)) assert.deepEqual(result.exceptionGuides, []);
+  assert.deepEqual(analyzeOrderBatch(orders), second);
 });
