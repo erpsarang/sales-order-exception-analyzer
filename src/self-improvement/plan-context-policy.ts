@@ -2,11 +2,15 @@ export function needsHumanOutputPlanContext(requirement: string): boolean {
   const lower = requirement.toLowerCase();
 
   const koreanOutputIntent =
-    /(표시|보여주|안내|문구|메시지|댓글|코멘트)/.test(requirement);
+    /(표시|보여주|안내|문구|메시지|댓글)/.test(requirement);
+  const koreanCommentIntent =
+    /(?:이슈|issue|pr|pull request).{0,30}(?:코멘트|댓글)|(?:코멘트|댓글).{0,30}(?:남기|작성|게시|등록)/i.test(requirement);
   const englishOutputIntent =
-    /\b(user-facing|human-facing|display|show|render|message|comment|next action)\b/.test(lower);
+    /\b(user-facing|human-facing|display|show|render|message|next action)\b/.test(lower);
+  const englishCommentIntent =
+    /\b(issue|pull request|pr)\b.{0,30}\bcomment\b|\b(add|post|write|publish)\b.{0,20}\bcomment\b/.test(lower);
 
-  return koreanOutputIntent || englishOutputIntent;
+  return koreanOutputIntent || koreanCommentIntent || englishOutputIntent || englishCommentIntent;
 }
 
 export function planImpactTestScopeGuidance(): string {
