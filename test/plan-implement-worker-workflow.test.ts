@@ -85,6 +85,39 @@ test("bounded IMPLEMENT timeout retry usage는 raw proposal 보존 뒤 trusted s
   assert.doesNotMatch(inputCleanup, /worker-codex-home-timeout-retry/);
 });
 
+test("bounded IMPLEMENT timeout retry 실패는 usage 관찰 뒤 명시적으로 fail-closed한다", () => {
+  const retry = workflow.slice(workflow.indexOf("\n  timeout_retry:\n"), workflow.indexOf("\n  attempt0_result:\n"));
+  const actionIndex = retry.indexOf("Untrusted bounded IMPLEMENT timeout retry");
+  const checkoutIndex = retry.indexOf("Trusted validation checkout retry");
+  const observeIndex = retry.indexOf("CODEX_HOME persisted bounded IMPLEMENT timeout retry failure usage 관찰");
+  const recordedIndex = retry.indexOf("trusted bounded IMPLEMENT timeout retry failure usage artifact 저장");
+  const unavailableIndex = retry.indexOf("trusted bounded IMPLEMENT timeout retry failure usage unavailable observation 저장");
+  const cleanupIndex = retry.indexOf("timeout retry CODEX_HOME 제거");
+  const gateIndex = retry.indexOf("timeout retry 실행 결과 확인");
+  const candidateIndex = retry.indexOf("Trusted candidate 검증 retry");
+
+  assert.ok(actionIndex >= 0);
+  assert.ok(checkoutIndex > actionIndex);
+  assert.ok(observeIndex > checkoutIndex);
+  assert.ok(recordedIndex > observeIndex);
+  assert.ok(unavailableIndex > recordedIndex);
+  assert.ok(cleanupIndex > unavailableIndex);
+  assert.ok(gateIndex > cleanupIndex);
+  assert.ok(candidateIndex > gateIndex);
+
+  assert.match(retry, /id: implement_retry[\s\S]*continue-on-error: true[\s\S]*timeout-minutes: 6/);
+  assert.match(retry, /timeout retry raw proposal artifact 저장[\s\S]*if: steps\.implement_retry\.outcome == 'success'/);
+  assert.match(retry, /CODEX_HOME persisted bounded IMPLEMENT timeout retry usage exact 기록[\s\S]*if: steps\.implement_retry\.outcome == 'success'/);
+  assert.match(retry, /CODEX_HOME persisted bounded IMPLEMENT timeout retry failure usage 관찰[\s\S]*if: steps\.implement_retry\.outcome == 'failure'/);
+  assert.match(retry, /ai-usage-timeout-observation-handler\.ts/);
+  assert.match(retry, /AI_USAGE_STAGE: bounded-implement-timeout-retry/);
+  assert.match(retry, /AI_USAGE_JOB_NAME: timeout_retry/);
+  assert.match(retry, /bounded-implement-usage-observation\/timeout-retry-failure\.json/);
+  assert.match(retry, /RETRY_OUTCOME: \$\{\{ steps\.implement_retry\.outcome \}\}/);
+  assert.match(retry, /bounded IMPLEMENT timeout retry failed after usage observation/);
+  assert.doesNotMatch(retry, /actions\/jobs\/.*\/logs/);
+});
+
 test("bounded IMPLEMENT attempt0 timeout은 job 종료 전에 persisted usage 또는 unavailable 증거를 남긴다", () => {
   const attempt0 = workflow.slice(workflow.indexOf("\n  attempt0:\n"), workflow.indexOf("\n  timeout_retry:\n"));
   const retryInputIndex = attempt0.indexOf("timeout retry input artifact 저장");
