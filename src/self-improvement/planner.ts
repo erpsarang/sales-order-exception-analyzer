@@ -365,9 +365,10 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
     }
   }
 
+  if (scriptPathAnchors.length > 0) add(fallback.find((entry) => entry.path === "package.json"));
   add(fallback.find((entry) => fileRolePriority(entry.path) === 1));
   add(fallback.find((entry) => fileRolePriority(entry.path) === 2));
-  add(fallback.find((entry) => entry.path === "package.json"));
+  if (scriptPathAnchors.length === 0) add(fallback.find((entry) => entry.path === "package.json"));
   for (const candidate of fallback) add(candidate);
   return selected;
 }
