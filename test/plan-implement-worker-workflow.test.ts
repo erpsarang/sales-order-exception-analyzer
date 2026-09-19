@@ -54,6 +54,37 @@ test("PLAN Worker는 timeout 경계 failure만 fresh runner에서 1회 bounded �
 });
 
 
+test("bounded IMPLEMENT attempt0 usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
+  const attempt0 = workflow.slice(workflow.indexOf("\n  attempt0:\n"), workflow.indexOf("\n  timeout_retry:\n"));
+  const rawIndex = attempt0.indexOf("attempt0 raw proposal artifact 저장");
+  const checkoutIndex = attempt0.indexOf("Trusted validation checkout 0");
+  const usageIndex = attempt0.indexOf("CODEX_HOME persisted bounded IMPLEMENT attempt0 usage exact 기록");
+  const usageArtifactIndex = attempt0.indexOf("trusted bounded IMPLEMENT attempt0 usage artifact 저장");
+  const cleanupIndex = attempt0.indexOf("attempt0 CODEX_HOME 제거");
+  const candidateValidationIndex = attempt0.indexOf("Trusted candidate 검증 0");
+
+  assert.ok(rawIndex >= 0);
+  assert.ok(checkoutIndex > rawIndex);
+  assert.ok(usageIndex > checkoutIndex);
+  assert.ok(usageArtifactIndex > usageIndex);
+  assert.ok(cleanupIndex > usageArtifactIndex);
+  assert.ok(candidateValidationIndex > cleanupIndex);
+
+  assert.match(attempt0, /bounded-worker-raw-proposal-attempt0-/);
+  assert.match(attempt0, /working-directory: control-validate-0[\s\S]*ai-usage-rollout-handler\.ts/);
+  assert.match(attempt0, /CODEX_HOME_PATH: \$\{\{ runner\.temp \}\}\/worker-codex-home/);
+  assert.match(attempt0, /AI_USAGE_STAGE: bounded-implement-attempt0/);
+  assert.match(attempt0, /AI_USAGE_JOB_NAME: attempt0/);
+  assert.match(attempt0, /bounded-implement-usage\/attempt0\.json/);
+  assert.doesNotMatch(attempt0, /actions\/jobs\/.*\/logs/);
+
+  const inputCleanup = attempt0.slice(
+    attempt0.indexOf("      - name: Worker input 제거"),
+    attempt0.indexOf("      - name: Trusted validation checkout 0"),
+  );
+  assert.doesNotMatch(inputCleanup, /worker-codex-home/);
+});
+
 test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () => {
   assert.match(workflow, /source_run_id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
   assert.match(workflow, /source_run_attempt: \$\{\{ steps\.source\.outputs\.run_attempt \}\}/);

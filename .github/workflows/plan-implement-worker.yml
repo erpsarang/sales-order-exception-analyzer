@@ -356,10 +356,22 @@ jobs:
             ${{ runner.temp }}/plan-worker-input/schema.json
           if-no-files-found: error
 
+      - name: attempt0 raw proposal artifact 저장
+        if: >-
+          steps.source.outputs.should_run == 'true' &&
+          steps.prepare.outputs.reuse_candidate != 'true' &&
+          steps.implement0.outcome == 'success' &&
+          steps.timeout0.outputs.retry != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-worker-raw-proposal-attempt0-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-output/raw-proposal.json
+          if-no-files-found: error
+
       - name: Worker input 제거
         if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
+        run: rm -rf "$RUNNER_TEMP/plan-worker-input"
 
       - name: Trusted validation checkout 0
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
@@ -373,6 +385,44 @@ jobs:
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
         working-directory: control-validate-0
         run: npm ci --ignore-scripts
+
+      - name: CODEX_HOME persisted bounded IMPLEMENT attempt0 usage exact 기록
+        if: >-
+          steps.source.outputs.should_run == 'true' &&
+          steps.prepare.outputs.reuse_candidate != 'true' &&
+          steps.implement0.outcome == 'success' &&
+          steps.timeout0.outputs.retry != 'true'
+        id: usage0
+        working-directory: control-validate-0
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home
+          AI_USAGE_STAGE: bounded-implement-attempt0
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: attempt0
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
+
+      - name: trusted bounded IMPLEMENT attempt0 usage artifact 저장
+        if: >-
+          steps.source.outputs.should_run == 'true' &&
+          steps.prepare.outputs.reuse_candidate != 'true' &&
+          steps.implement0.outcome == 'success' &&
+          steps.timeout0.outputs.retry != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage0.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
+          if-no-files-found: error
+
+      - name: attempt0 CODEX_HOME 제거
+        if: >-
+          always() &&
+          steps.source.outputs.should_run == 'true' &&
+          steps.prepare.outputs.reuse_candidate != 'true' &&
+          steps.timeout0.outputs.retry != 'true'
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/worker-codex-home"
 
       - name: Trusted handoff artifact 재다운로드 0
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
