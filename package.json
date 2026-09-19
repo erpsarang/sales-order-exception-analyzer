@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "npm run build && node --test --import tsx test/*.test.ts"
+    "test": "npm run build && node --test --import tsx test/*.test.ts",
+    "analyze": "node --import tsx src/order-analysis-cli.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
