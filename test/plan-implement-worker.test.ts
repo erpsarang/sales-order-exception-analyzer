@@ -16,8 +16,10 @@ import {
 } from "../src/self-improvement/plan-authorization.js";
 import {
   createWorkerCandidateProvenance,
+  planImplementAiCallId,
   validatePlanImplementWorkerSource,
   verifyPlanImplementWorkerBundle,
+  workerAiCallLedgerArtifactName,
   workerCandidateArtifactName,
   type HandoffArtifactMetadata,
   type PlanImplementWorkerSourceRun,
@@ -247,6 +249,35 @@ test("recovery candidate provenance도 exact trusted recovery guard를 유지한
     workerRunAttempt: 1,
     candidate,
   }));
+});
+
+test("AI call identity는 exact Handoff/input/policy에 결정적으로 결합된다", () => {
+  const { bundle, approved } = fixture();
+  const source = sourceRun();
+  const artifact = handoffArtifact(approved);
+  const first = planImplementAiCallId({ bundle, source, sourceArtifact: artifact });
+  const second = planImplementAiCallId({ bundle, source, sourceArtifact: artifact });
+
+  assert.equal(first, second);
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.equal(workerAiCallLedgerArtifactName(first), `bounded-worker-ai-call-${first}`);
+
+  assert.notEqual(
+    planImplementAiCallId({
+      bundle,
+      source: sourceRun({ id: source.id + 1 }),
+      sourceArtifact: artifact,
+    }),
+    first,
+  );
+  assert.notEqual(
+    planImplementAiCallId({
+      bundle,
+      source,
+      sourceArtifact: { ...artifact, digest: "1".repeat(64) },
+    }),
+    first,
+  );
 });
 
 test("candidate artifact 이름은 source handoff와 Worker run attempt를 모두 고정한다", () => {
