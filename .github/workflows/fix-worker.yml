@@ -32,7 +32,8 @@ jobs:
     outputs:
       request_artifact_name: ${{ steps.source.outputs.artifact_name }}
       request_artifact_attempt: ${{ steps.source.outputs.run_attempt }}
-      source_control_plane_sha: ${{ steps.source.outputs.head_sha }}
+      source_control_plane_sha: ${{ steps.source.outputs.trusted_code_sha }}
+      source_request_control_plane_sha: ${{ steps.source.outputs.head_sha }}
       reviewed_head_sha: ${{ steps.prepare.outputs.reviewed_head_sha }}
       reviewed_branch: ${{ steps.prepare.outputs.reviewed_branch }}
       fix_attempt: ${{ steps.prepare.outputs.fix_attempt }}
@@ -75,14 +76,15 @@ jobs:
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
 
+            const defaultBranch = context.payload.repository.default_branch;
             if (
               !sourceRun ||
               sourceRun.status !== 'completed' ||
               sourceRun.conclusion !== 'success' ||
               sourceRun.path !== '.github/workflows/fix-request.yml' ||
               sourceRun.event !== 'workflow_dispatch' ||
-              sourceRun.head_branch !== context.payload.repository.default_branch ||
-              sourceRun.head_sha !== context.sha ||
+              sourceRun.head_branch !== defaultBranch ||
+              !/^[0-9a-f]{40,64}$/.test(sourceRun.head_sha || '') ||
               sourceRun.run_attempt !== runAttempt
             ) {
               core.setFailed(
@@ -90,6 +92,57 @@ jobs:
               );
               return;
             }
+
+            const { data: currentBranch } = await github.rest.repos.getBranch({
+              ...context.repo,
+              branch: defaultBranch,
+            });
+            if (
+              context.ref !== `refs/heads/${defaultBranch}` ||
+              currentBranch.commit.sha !== context.sha
+            ) {
+              core.setFailed('FIX Worker trusted code is not exact current default branch');
+              return;
+            }
+
+            const { data: drift } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo,
+              basehead: `${sourceRun.head_sha}...${context.sha}`,
+              per_page: 100,
+            });
+            const driftFiles = drift.files;
+            if (
+              !['ahead', 'identical'].includes(drift.status) ||
+              drift.merge_base_commit.sha !== sourceRun.head_sha ||
+              !Array.isArray(driftFiles) ||
+              driftFiles.length > 6
+            ) {
+              core.setFailed('FIX Worker recovery drift is not a bounded ancestor diff');
+              return;
+            }
+
+            const allowedFrameworkDrift = new Set([
+              '.github/workflows/fix-worker.yml',
+              'src/self-improvement/fix-handler.ts',
+              'test/fix-dispatch-workflow.test.ts',
+            ]);
+            const rejectedDrift = driftFiles.filter(
+              (file) =>
+                !['added', 'modified'].includes(file.status) ||
+                !allowedFrameworkDrift.has(file.filename) ||
+                file.previous_filename,
+            );
+            if (rejectedDrift.length > 0) {
+              core.setFailed(
+                `FIX Worker recovery requires fresh FIX Request; non-approved drift: ${rejectedDrift
+                  .map((file) => `${file.status}:${file.filename}`)
+                  .join(',')}`,
+              );
+              return;
+            }
+            core.info(
+              `FIX Worker recovery drift verified: source=${sourceRun.head_sha}, current=${context.sha}, files=${driftFiles.length}`,
+            );
 
             const { data } = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner,
@@ -108,11 +161,12 @@ jobs:
             core.setOutput('artifact_name', artifactName);
             core.setOutput('run_attempt', String(runAttempt));
             core.setOutput('head_sha', sourceRun.head_sha);
+            core.setOutput('trusted_code_sha', context.sha);
 
       - name: trusted control-plane exact SHA checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.source.outputs.head_sha }}
+          ref: ${{ steps.source.outputs.trusted_code_sha }}
           persist-credentials: false
 
       - name: FIX request artifact 다운로드
@@ -457,7 +511,7 @@ jobs:
           FIX_RUNTIME_DIR: ${{ runner.temp }}/fix
           SOURCE_FIX_REQUEST_RUN_ID: ${{ inputs.source_fix_request_run_id }}
           SOURCE_FIX_REQUEST_RUN_ATTEMPT: ${{ needs.prepare.outputs.request_artifact_attempt }}
-          SOURCE_FIX_REQUEST_CONTROL_PLANE_SHA: ${{ needs.prepare.outputs.source_control_plane_sha }}
+          SOURCE_FIX_REQUEST_CONTROL_PLANE_SHA: ${{ needs.prepare.outputs.source_request_control_plane_sha }}
           SOURCE_FIX_REQUEST_WORKFLOW_PATH: .github/workflows/fix-request.yml
           SOURCE_FIX_REQUEST_ARTIFACT_NAME: ${{ needs.prepare.outputs.request_artifact_name }}
           AI_RESULT_ID: codex-action-fix:${{ github.run_id }}:${{ github.run_attempt }}
