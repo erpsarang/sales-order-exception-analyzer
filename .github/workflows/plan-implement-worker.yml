@@ -29,6 +29,8 @@ jobs:
       recovery_current_sha: ${{ steps.source.outputs.recovery_current_sha }}
       base_sha: ${{ steps.base.outputs.sha }}
       candidate_artifact_name: ${{ steps.prepare.outputs.candidate_artifact_name }}
+      ai_call_id: ${{ steps.prepare.outputs.ai_call_id }}
+      reused: ${{ steps.prepare.outputs.reuse_candidate }}
       ci_status: ${{ steps.ci0.outputs.status }}
       repair_ready: ${{ steps.ci0.outputs.repair_ready }}
       repair_blocked_reason: ${{ steps.ci0.outputs.repair_blocked_reason }}
@@ -208,6 +210,43 @@ jobs:
           SOURCE_DIRECTORY: ${{ runner.temp }}/plan-worker-source
           WORKER_INPUT_DIRECTORY: ${{ runner.temp }}/plan-worker-input
 
+      - name: 동일 AI call 성공 candidate 다운로드
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.prepare.outputs.reuse_candidate_name }}
+          path: ${{ runner.temp }}/reused-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.prepare.outputs.reuse_worker_run_id }}
+
+      - name: 재사용 candidate trusted rebind
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
+        working-directory: control-prep
+        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts reuse
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.source.outputs.run_attempt }}
+          SOURCE_ARTIFACT_NAME: ${{ steps.source.outputs.name }}
+          SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.id }}
+          SOURCE_ARTIFACT_DIGEST: ${{ steps.source.outputs.digest }}
+          RECOVERY_GUARD_KIND: ${{ steps.source.outputs.recovery_kind }}
+          RECOVERY_BASE_SHA: ${{ steps.source.outputs.recovery_base_sha }}
+          RECOVERY_CURRENT_SHA: ${{ steps.source.outputs.recovery_current_sha }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+          WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_CALL_ID: ${{ steps.prepare.outputs.ai_call_id }}
+          REUSE_WORKER_RUN_ID: ${{ steps.prepare.outputs.reuse_worker_run_id }}
+          REUSE_WORKER_RUN_ATTEMPT: ${{ steps.prepare.outputs.reuse_worker_run_attempt }}
+          REUSE_CANDIDATE_NAME: ${{ steps.prepare.outputs.reuse_candidate_name }}
+          REUSE_CANDIDATE_ID: ${{ steps.prepare.outputs.reuse_candidate_id }}
+          REUSE_CANDIDATE_DIGEST: ${{ steps.prepare.outputs.reuse_candidate_digest }}
+          SOURCE_DIRECTORY: ${{ runner.temp }}/plan-worker-source
+          REUSED_CANDIDATE_DIRECTORY: ${{ runner.temp }}/reused-candidate
+          CANDIDATE_OUTPUT_DIRECTORY: ${{ runner.temp }}/validated-candidate-0
+
       - name: exact approved base SHA 고정
         if: steps.source.outputs.should_run == 'true'
         id: base
@@ -219,8 +258,13 @@ jobs:
           BASE_SHA="$(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.env.CONTRACT_JSON,"utf8")); if(typeof x.baseSha!=="string" || !/^[0-9a-f]{40,64}$/.test(x.baseSha)) process.exit(2); process.stdout.write(x.baseSha)')"
           echo "sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: 재사용 검증 후 trusted preparation 제거
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
+        shell: bash
+        run: rm -rf "$GITHUB_WORKSPACE/control-prep" "$RUNNER_TEMP/plan-worker-source" "$RUNNER_TEMP/reused-candidate"
+
       - name: Worker 실행 전 repository와 trusted source 제거
-        if: steps.source.outputs.should_run == 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -231,13 +275,13 @@ jobs:
           test -f "$RUNNER_TEMP/plan-worker-input/schema.json"
 
       - name: IMPLEMENT timeout 측정 시작
-        if: steps.source.outputs.should_run == 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
         id: implement_clock
         shell: bash
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Untrusted bounded IMPLEMENT Worker
-        if: steps.source.outputs.should_run == 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
         id: implement0
         continue-on-error: true
         timeout-minutes: 4
@@ -258,7 +302,7 @@ jobs:
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: IMPLEMENT timeout 재시도 분류
-        if: always() && steps.source.outputs.should_run == 'true'
+        if: always() && steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
         id: timeout0
         shell: bash
         env:
@@ -283,7 +327,7 @@ jobs:
           fi
 
       - name: bounded IMPLEMENT 실행 결과 확인
-        if: always() && steps.source.outputs.should_run == 'true'
+        if: always() && steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
         id: implement_gate
         shell: bash
         env:
@@ -302,7 +346,7 @@ jobs:
           exit 1
 
       - name: timeout retry input artifact 저장
-        if: steps.timeout0.outputs.retry == 'true'
+        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bounded-worker-timeout-retry-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -312,7 +356,7 @@ jobs:
           if-no-files-found: error
 
       - name: Worker input 제거
-        if: steps.source.outputs.should_run == 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
         shell: bash
         run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
@@ -340,7 +384,7 @@ jobs:
           run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Trusted candidate 검증 0
-        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry != 'true'
         working-directory: control-validate-0
         run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts validate
         env:
@@ -608,6 +652,9 @@ jobs:
       recovery_current_sha: ${{ steps.effective.outputs.recovery_current_sha }}
       base_sha: ${{ steps.effective.outputs.base_sha }}
       candidate_artifact_name: ${{ steps.effective.outputs.candidate_artifact_name }}
+      ai_call_id: ${{ steps.effective.outputs.ai_call_id }}
+      reused: ${{ steps.effective.outputs.reused }}
+      retry_required: ${{ steps.effective.outputs.retry_required }}
 
     steps:
       - name: initial/retry effective 결과 고정
@@ -634,6 +681,8 @@ jobs:
           RECOVERY_CURRENT_SHA: ${{ needs.attempt0.outputs.recovery_current_sha }}
           BASE_SHA: ${{ needs.attempt0.outputs.base_sha }}
           CANDIDATE_ARTIFACT_NAME: ${{ needs.attempt0.outputs.candidate_artifact_name }}
+          AI_CALL_ID: ${{ needs.attempt0.outputs.ai_call_id }}
+          REUSED: ${{ needs.attempt0.outputs.reused }}
         run: |
           set -euo pipefail
           infrastructure_failed=false
@@ -675,6 +724,9 @@ jobs:
             echo "recovery_current_sha=$RECOVERY_CURRENT_SHA"
             echo "base_sha=$BASE_SHA"
             echo "candidate_artifact_name=$CANDIDATE_ARTIFACT_NAME"
+            echo "ai_call_id=$AI_CALL_ID"
+            echo "reused=$REUSED"
+            echo "retry_required=$RETRY_REQUIRED"
           } >> "$GITHUB_OUTPUT"
 
 
@@ -1181,4 +1233,34 @@ jobs:
           path: |
             ${{ runner.temp }}/final-candidate/candidate.json
             ${{ runner.temp }}/final-candidate/candidate-provenance.json
+          if-no-files-found: error
+
+      - name: direct PASS AI call ledger 생성
+        if: >-
+          needs.attempt0_result.outputs.ci_status == 'PASS' &&
+          needs.attempt0_result.outputs.reused != 'true' &&
+          needs.attempt0_result.outputs.retry_required != 'true'
+        shell: bash
+        env:
+          AI_CALL_ID: ${{ needs.attempt0_result.outputs.ai_call_id }}
+          SOURCE_RUN_ID: ${{ needs.attempt0_result.outputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ needs.attempt0_result.outputs.source_run_attempt }}
+          CANDIDATE_ARTIFACT_NAME: ${{ needs.attempt0_result.outputs.candidate_artifact_name }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+          WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test "${#AI_CALL_ID}" -eq 64
+          mkdir -p "$RUNNER_TEMP/ai-call-ledger"
+          printf '{"schemaVersion":1,"kind":"trusted-bounded-worker-ai-call-ledger","aiCallId":"%s","sourceHandoff":{"runId":%s,"runAttempt":%s},"worker":{"runId":%s,"runAttempt":%s},"candidateArtifact":"%s"}\n'             "$AI_CALL_ID" "$SOURCE_RUN_ID" "$SOURCE_RUN_ATTEMPT" "$WORKER_RUN_ID" "$WORKER_RUN_ATTEMPT" "$CANDIDATE_ARTIFACT_NAME"             > "$RUNNER_TEMP/ai-call-ledger/ledger.json"
+
+      - name: direct PASS AI call ledger 저장
+        if: >-
+          needs.attempt0_result.outputs.ci_status == 'PASS' &&
+          needs.attempt0_result.outputs.reused != 'true' &&
+          needs.attempt0_result.outputs.retry_required != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-worker-ai-call-${{ needs.attempt0_result.outputs.ai_call_id }}
+          path: ${{ runner.temp }}/ai-call-ledger/ledger.json
           if-no-files-found: error
