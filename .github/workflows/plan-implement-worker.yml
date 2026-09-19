@@ -1205,11 +1205,69 @@ jobs:
     if: always() && needs.attempt0_result.outputs.should_run == 'true'
     permissions:
       actions: read
+      contents: read
       issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
+      - name: bounded IMPLEMENT recorded usage summary 입력 준비
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/bounded-implement-usage-records"
+
+      - name: bounded IMPLEMENT recorded usage artifacts 다운로드
+        if: >-
+          needs.attempt0_result.outputs.infrastructure_failed != 'true' &&
+          (needs.attempt0_result.outputs.reused != 'true' ||
+           needs.repair1.result == 'success' ||
+           needs.repair2.result == 'success')
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ai-usage-bounded-implement-*-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bounded-implement-usage-records
+          merge-multiple: true
+
+      - name: Trusted recorded usage summary checkout
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          path: control-usage-summary
+
+      - name: Node 설정 usage summary
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: control-usage-summary/package-lock.json
+
+      - name: Trusted usage summary dependencies 설치
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        working-directory: control-usage-summary
+        run: npm ci --ignore-scripts
+
+      - name: bounded IMPLEMENT recorded usage summary 생성
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        id: usage_summary
+        working-directory: control-usage-summary
+        run: npm exec -- tsx src/self-improvement/ai-usage-summary-handler.ts
+        env:
+          AI_USAGE_SUMMARY_DIRECTORY: ${{ runner.temp }}/bounded-implement-usage-records
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_SUMMARY_JSON: ${{ runner.temp }}/bounded-implement-usage-summary/summary.json
+
+      - name: trusted bounded IMPLEMENT recorded usage summary artifact 저장
+        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage_summary.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage-summary/summary.json
+          if-no-files-found: error
+
       - name: attempt 0 state 다운로드
         if: needs.attempt0_result.outputs.ci_status != ''
         uses: actions/download-artifact@v4
