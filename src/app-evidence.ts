@@ -1,5 +1,63 @@
-import { analyzeOrderBatch } from "./batch-order-analysis.js";
+import { createHash } from "node:crypto";
+import { analyzeOrderBatch, type BatchOrderAnalysisResult, type BatchOrderResult } from "./batch-order-analysis.js";
 import type { OrderInput } from "./order-analysis.js";
+
+export interface AppRuntimeBatchOutput {
+  format: "batch-projection-v1";
+  fullOutputDigest: string;
+  summary: {
+    totalCount: number;
+    shipReadyCount: number;
+    exceptionCount: number;
+    reasonCounts: BatchOrderAnalysisResult["summary"]["reasonCounts"];
+  };
+  results: Array<{
+    orderId: BatchOrderResult["orderId"];
+    status: BatchOrderResult["status"];
+    reasonCodes: BatchOrderResult["reasonCodes"];
+    guideRefs: number[];
+  }>;
+  guideTable: BatchOrderResult["exceptionGuides"];
+  exceptionPriorities: Array<{ rank: number; resultIndex: number }>;
+  exceptionWorklist: Array<{ rank: number; resultIndex: number }>;
+}
+
+/** v1의 가시 필드는 명시적으로 유지하고 전체 출력 변경은 digest에 반영한다. */
+export function projectAppRuntimeBatchOutput(
+  output: BatchOrderAnalysisResult,
+): AppRuntimeBatchOutput {
+  const fullOutputDigest = createHash("sha256").update(JSON.stringify(output), "utf8").digest("hex");
+  const guideTable: AppRuntimeBatchOutput["guideTable"] = [];
+  const guideIndices = new Map<string, number>();
+  const results = output.results.map((result) => ({
+    orderId: result.orderId,
+    status: result.status,
+    reasonCodes: [...result.reasonCodes],
+    guideRefs: result.exceptionGuides.map((guide) => {
+      const key = JSON.stringify(guide);
+      const existing = guideIndices.get(key);
+      if (existing !== undefined) return existing;
+      const index = guideTable.length;
+      guideTable.push({ ...guide });
+      guideIndices.set(key, index);
+      return index;
+    }),
+  }));
+  return {
+    format: "batch-projection-v1",
+    fullOutputDigest,
+    summary: {
+      totalCount: output.summary.totalCount,
+      shipReadyCount: output.summary.shipReadyCount,
+      exceptionCount: output.summary.exceptionCount,
+      reasonCounts: { ...output.summary.reasonCounts },
+    },
+    results,
+    guideTable,
+    exceptionPriorities: output.exceptionPriorities.map(({ rank, resultIndex }) => ({ rank, resultIndex })),
+    exceptionWorklist: output.exceptionWorklist.map(({ rank, resultIndex }) => ({ rank, resultIndex })),
+  };
+}
 
 export interface AppRuntimeEvidenceScenario {
   readonly id: string;
@@ -9,7 +67,7 @@ export interface AppRuntimeEvidenceScenario {
     readonly orderIds: readonly string[];
     readonly orders: ReadonlyArray<Readonly<OrderInput>>;
   };
-  readonly output: ReturnType<typeof analyzeOrderBatch>;
+  readonly output: AppRuntimeBatchOutput;
 }
 
 export interface AppRuntimeEvidence {
@@ -45,7 +103,7 @@ function scenario(
       orderIds: orders.map(({ orderId }) => orderId),
       orders: orders.map((order) => ({ ...order })),
     },
-    output: analyzeOrderBatch(orders),
+    output: projectAppRuntimeBatchOutput(analyzeOrderBatch(orders)),
   };
 }
 

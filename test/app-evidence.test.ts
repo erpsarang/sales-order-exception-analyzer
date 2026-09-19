@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { createAppRuntimeEvidence, verifyAppRuntimeEvidence } from "../src/app-evidence.js";
+import { createAppRuntimeEvidence, projectAppRuntimeBatchOutput, verifyAppRuntimeEvidence } from "../src/app-evidence.js";
 import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import { analyzeOrder, type ExceptionGuide, type ReasonCode } from "../src/order-analysis.js";
 
@@ -60,7 +61,7 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
   ]);
 
   const mixed = first.scenarios.find(({ id }) => id === "mixed-exceptions")!;
-  assert.deepEqual(mixed.output.summary.exceptionOrderIds, [
+  assert.deepEqual(mixed.output.results.filter(({ status }) => status === "EXCEPTION").map(({ orderId }) => orderId), [
     "SO-INVALID",
     "SO-CUSTOMER",
     "SO-STOCK",
@@ -93,7 +94,8 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
     customerBlocked: false,
     materialBlocked: false,
   });
-  assert.deepEqual(mixed.output.results[0]!.orderDetails, {
+  const { orderId: mixedId, availableQuantity: mixedAvailable, customerBlocked: mixedCustomerBlocked, materialBlocked: mixedMaterialBlocked, ...mixedDetails } = mixed.input.orders[0]!;
+  assert.deepEqual(mixedDetails, {
     materialId: "M-001",
     orderQuantity: 10,
     customerId: "C-001",
@@ -103,33 +105,57 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
   });
   const seenReasons = new Set<ReasonCode>();
   for (const scenario of first.scenarios) {
-    assert.deepEqual(scenario.output, analyzeOrderBatch(scenario.input.orders));
+    const full = analyzeOrderBatch(scenario.input.orders);
+    assert.deepEqual(scenario.output, projectAppRuntimeBatchOutput(full));
+    assert.equal(scenario.output.format, "batch-projection-v1");
+    assert.equal(scenario.output.fullOutputDigest, createHash("sha256").update(JSON.stringify(full), "utf8").digest("hex"));
+    assert.deepEqual(Object.keys(scenario.output).sort(), [
+      "exceptionPriorities", "exceptionWorklist", "format", "fullOutputDigest", "guideTable", "results", "summary",
+    ]);
+    assert.deepEqual(scenario.output.summary, {
+      totalCount: full.summary.totalCount,
+      shipReadyCount: full.summary.shipReadyCount,
+      exceptionCount: full.summary.exceptionCount,
+      reasonCounts: full.summary.reasonCounts,
+    });
+    assert.deepEqual(scenario.output.exceptionPriorities, full.exceptionPriorities.map(({ rank, resultIndex }) => ({ rank, resultIndex })));
+    assert.deepEqual(scenario.output.exceptionWorklist, full.exceptionWorklist.map(({ rank, resultIndex }) => ({ rank, resultIndex })));
     assert.equal(scenario.input.orderCount, scenario.input.orders.length);
     assert.deepEqual(scenario.input.orderIds, scenario.input.orders.map(({ orderId }) => orderId));
     assert.equal(scenario.output.results.length, scenario.input.orders.length);
+    const firstSeenGuides: ExceptionGuide[] = [];
     scenario.input.orders.forEach((order, index) => {
       const result = scenario.output.results[index]!;
+      const fullResult = full.results[index]!;
       const hasDetails = scenario.id === "duplicate-exception-id" ||
         (scenario.id === "mixed-exceptions" && index === 0);
       for (const key of ["estimatedAmount", "dueDate", "orderComment"] as const) {
         assert.equal(Object.prototype.hasOwnProperty.call(order, key), hasDetails);
-        assert.equal(Object.prototype.hasOwnProperty.call(result.orderDetails, key), hasDetails);
+        assert.equal(Object.prototype.hasOwnProperty.call(fullResult.orderDetails, key), hasDetails);
       }
       const { orderId, availableQuantity, customerBlocked, materialBlocked, ...orderDetails } = order;
       assert.equal(result.orderId, orderId);
-      assert.deepEqual(result.orderDetails, orderDetails);
-      assert.notStrictEqual(result.orderDetails, order);
-      const { orderId: resultId, orderDetails: resultDetails, ...analysis } = result;
-      assert.deepEqual(analysis, analyzeOrder(order));
-      assert.deepEqual(result.exceptionGuides, result.reasonCodes.map((code) => expectedGuides[code]));
+      assert.deepEqual(fullResult.orderDetails, orderDetails);
+      assert.notStrictEqual(fullResult.orderDetails, order);
+      assert.deepEqual(Object.keys(result).sort(), ["guideRefs", "orderId", "reasonCodes", "status"]);
+      const restoredGuides = result.guideRefs.map((ref) => {
+        assert.ok(Number.isInteger(ref) && ref >= 0 && ref < scenario.output.guideTable.length);
+        return scenario.output.guideTable[ref]!;
+      });
+      assert.deepEqual({ status: result.status, reasonCodes: result.reasonCodes, exceptionGuides: restoredGuides }, analyzeOrder(order));
+      assert.deepEqual(restoredGuides, result.reasonCodes.map((code) => expectedGuides[code]));
+      for (const guide of fullResult.exceptionGuides) {
+        if (!firstSeenGuides.some((seen) => JSON.stringify(seen) === JSON.stringify(guide))) firstSeenGuides.push(guide);
+      }
       for (const code of result.reasonCodes) seenReasons.add(code);
     });
+    assert.deepEqual(scenario.output.guideTable, firstSeenGuides);
   }
   assert.deepEqual([...seenReasons].sort(), Object.keys(expectedGuides).sort());
 
   const duplicate = first.scenarios.find(({ id }) => id === "duplicate-exception-id")!;
-  assert.deepEqual(duplicate.output.summary.exceptionOrderIds, ["SO-DUP", "SO-DUP"]);
-  assert.deepEqual(duplicate.output.results.map(({ orderDetails }) => orderDetails), [
+  assert.deepEqual(duplicate.output.results.filter(({ status }) => status === "EXCEPTION").map(({ orderId }) => orderId), ["SO-DUP", "SO-DUP"]);
+  assert.deepEqual(duplicate.input.orders.map(({ orderId, availableQuantity, customerBlocked, materialBlocked, ...orderDetails }) => orderDetails), [
     {
       materialId: "M-001",
       orderQuantity: 10,
@@ -150,6 +176,58 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
   assert.ok(Buffer.byteLength(JSON.stringify(first), "utf8") <= 8_192);
 });
 
+test("축약은 실제 가이드 전체 값과 반복 순서를 보존하고 각 예외 배열을 독립적으로 투영한다", () => {
+  const orders = createAppRuntimeEvidence(sha, purpose).scenarios[2]!.input.orders;
+  const full = analyzeOrderBatch([...orders, ...orders]);
+  const guide = full.results[0]!.exceptionGuides[0]!;
+  const changedGuide = { ...guide, check: "실제 출력의 다른 확인 내용" };
+  full.results[0]!.exceptionGuides = [changedGuide, guide, { ...guide }, changedGuide];
+  full.results[1]!.exceptionGuides = [{ ...guide }];
+  full.exceptionPriorities.reverse();
+  full.exceptionPriorities[0]!.rank = 7;
+  full.exceptionWorklist[0]!.rank = 9;
+  const snapshot = JSON.stringify(full);
+  const projection = projectAppRuntimeBatchOutput(full);
+  assert.equal(JSON.stringify(full), snapshot);
+  assert.deepEqual(projection, projectAppRuntimeBatchOutput(full));
+  assert.deepEqual(projection.guideTable, [changedGuide, guide]);
+  assert.deepEqual(projection.results.map(({ guideRefs }) => guideRefs), [[0, 1, 1, 0], [1]]);
+  assert.deepEqual(projection.exceptionPriorities, [{ rank: 7, resultIndex: 1 }, { rank: 1, resultIndex: 0 }]);
+  assert.deepEqual(projection.exceptionWorklist, [{ rank: 9, resultIndex: 0 }, { rank: 2, resultIndex: 1 }]);
+  projection.guideTable[0]!.check = "사본 수정";
+  projection.results[0]!.reasonCodes.length = 0;
+  projection.results[0]!.guideRefs.length = 0;
+  projection.summary.reasonCounts.CUSTOMER_BLOCKED = 99;
+  projection.exceptionPriorities[0]!.rank = 99;
+  projection.exceptionWorklist[0]!.resultIndex = 99;
+  assert.equal(JSON.stringify(full), snapshot);
+});
+
+test("생략 필드와 향후 추가 출력 필드도 전체 JSON digest에 반영한다", () => {
+  const orders = createAppRuntimeEvidence(sha, purpose).scenarios[3]!.input.orders;
+  const baseline = projectAppRuntimeBatchOutput(analyzeOrderBatch(orders));
+  const mutations: Array<(output: ReturnType<typeof analyzeOrderBatch>) => void> = [
+    (output) => { output.results[0]!.orderDetails.orderComment = "변경된 상세"; },
+    (output) => { output.summary.exceptionRate = 0; },
+    (output) => { output.summary.exceptionOrderIds.reverse(); output.summary.exceptionOrderIds[0] = "변경"; },
+    (output) => { output.summary.topReasonCodes.length = 0; },
+    (output) => { output.exceptionPriorities[0]!.basis.estimatedAmount = 1; },
+    (output) => { output.exceptionWorklist[0]!.exceptionGuides[0]!.action = "변경된 처리"; },
+    (output) => { Object.assign(output, { futureOutput: { value: "추가" } }); },
+    (output) => { Object.assign(output.results[0]!, { futureResult: "추가" }); },
+  ];
+  for (const mutate of mutations) {
+    const full = analyzeOrderBatch(orders);
+    mutate(full);
+    const projection = projectAppRuntimeBatchOutput(full);
+    assert.equal(projection.fullOutputDigest, createHash("sha256").update(JSON.stringify(full), "utf8").digest("hex"));
+    assert.notEqual(projection.fullOutputDigest, baseline.fullOutputDigest);
+    const { fullOutputDigest, ...visible } = projection;
+    const { fullOutputDigest: baselineDigest, ...baselineVisible } = baseline;
+    assert.deepEqual(visible, baselineVisible);
+  }
+});
+
 test("App Runtime Evidence는 source SHA 변조를 거부한다", () => {
   const evidence = createAppRuntimeEvidence(sha, purpose);
   assert.throws(() => verifyAppRuntimeEvidence(evidence, "b".repeat(40)));
@@ -157,15 +235,25 @@ test("App Runtime Evidence는 source SHA 변조를 거부한다", () => {
 
 test("App Runtime Evidence는 가이드 변조 및 생략과 실제 출력 변조를 거부한다", () => {
   const mutations: Array<(evidence: ReturnType<typeof createAppRuntimeEvidence>) => void> = [
-    (evidence) => { evidence.scenarios[1]!.output.results[1]!.exceptionGuides[0]!.check = "변조"; },
-    (evidence) => { evidence.scenarios[1]!.output.results[1]!.exceptionGuides[0]!.action = "변조"; },
-    (evidence) => { evidence.scenarios[1]!.output.results[1]!.exceptionGuides[0]!.reasonCode = "MATERIAL_BLOCKED"; },
-    (evidence) => { evidence.scenarios[1]!.output.results[1]!.exceptionGuides.length = 0; },
-    (evidence) => { evidence.scenarios[2]!.output.results[0]!.exceptionGuides.reverse(); },
+    (evidence) => { evidence.scenarios[1]!.output.guideTable[0]!.check = "변조"; },
+    (evidence) => { evidence.scenarios[1]!.output.guideTable[0]!.action = "변조"; },
+    (evidence) => { evidence.scenarios[1]!.output.guideTable[0]!.reasonCode = "MATERIAL_BLOCKED"; },
+    (evidence) => { evidence.scenarios[1]!.output.results[1]!.guideRefs.length = 0; },
+    (evidence) => { evidence.scenarios[2]!.output.results[0]!.guideRefs.reverse(); },
     (evidence) => { evidence.scenarios[1]!.output.results[1]!.reasonCodes.length = 0; },
     (evidence) => { evidence.scenarios[1]!.output.summary.exceptionCount = 0; },
     (evidence) => { evidence.scenarios[3]!.output.exceptionPriorities[0]!.rank = 99; },
-    (evidence) => { evidence.scenarios[1]!.output.results[0]!.orderDetails.orderComment = "변조"; },
+    (evidence) => { Object.assign(evidence.scenarios[1]!.input.orders[0]!, { orderComment: "변조" }); },
+    (evidence) => { evidence.scenarios[1]!.output.fullOutputDigest = "0".repeat(64); },
+    (evidence) => { Object.assign(evidence.scenarios[1]!.output, { format: "batch-projection-v2" }); },
+    (evidence) => { evidence.scenarios[1]!.output.guideTable.length = 0; },
+    (evidence) => { evidence.scenarios[1]!.output.results[1]!.guideRefs[0] = 99; },
+    (evidence) => { evidence.scenarios[1]!.output.results[0]!.status = "EXCEPTION"; },
+    (evidence) => { evidence.scenarios[3]!.output.exceptionPriorities[0]!.resultIndex = 1; },
+    (evidence) => { evidence.scenarios[3]!.output.exceptionWorklist[0]!.rank = 99; },
+    (evidence) => { evidence.scenarios[3]!.output.exceptionWorklist[0]!.resultIndex = 1; },
+    (evidence) => { evidence.scenarios[3]!.output.exceptionWorklist.reverse(); },
+    (evidence) => { evidence.scenarios[3]!.output.exceptionWorklist.length = 0; },
   ];
   for (const mutate of mutations) {
     const evidence = createAppRuntimeEvidence(sha, purpose);
@@ -174,7 +262,7 @@ test("App Runtime Evidence는 가이드 변조 및 생략과 실제 출력 변�
   }
   const first = createAppRuntimeEvidence(sha, purpose);
   const second = createAppRuntimeEvidence(sha, purpose);
-  first.scenarios[1]!.output.results[1]!.exceptionGuides[0]!.check = "변조";
+  first.scenarios[1]!.output.guideTable[0]!.check = "변조";
   assert.deepEqual(createAppRuntimeEvidence(sha, purpose), second);
   verifyAppRuntimeEvidence(second, sha);
 });
@@ -194,7 +282,7 @@ test("App Runtime Evidence는 UTF-8 8192 bytes까지 허용하고 초과를 거�
   assert.ok(JSON.stringify(over).length < 8_192);
   assert.throws(() => verifyAppRuntimeEvidence(over, sha), /exceeds bounded evidence item budget/);
 
-  over.scenarios[1]!.output.results[1]!.exceptionGuides[0]!.check = "변조";
+  over.scenarios[1]!.output.guideTable[0]!.check = "변조";
   assert.throws(() => verifyAppRuntimeEvidence(over, sha), /does not match deterministic app execution/);
   assert.throws(() => verifyAppRuntimeEvidence(over, "b".repeat(40)), /invalid App Runtime Evidence identity/);
 });

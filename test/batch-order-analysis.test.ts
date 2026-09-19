@@ -736,3 +736,131 @@ test("중복 정상 항목과 반복 호출의 빈 가이드 배열도 독립적
   for (const result of results.slice(1)) assert.deepEqual(result.exceptionGuides, []);
   assert.deepEqual(analyzeOrderBatch(orders), second);
 });
+
+test("처리 목록은 완성된 우선순위와 일치하며 중복 ID와 동일 객체의 복수 사유를 보존한다", () => {
+  const shared = Object.freeze({ ...exceptionOrder, dueDate: "2026-10-16", estimatedAmount: 10, orderComment: "반복 주문" });
+  const orders = Object.freeze([
+    shared,
+    Object.freeze({ ...normalOrder, orderId: shared.orderId, dueDate: "0001-01-01" }),
+    Object.freeze({ ...shared, customerId: "C-002", materialId: "M-002", dueDate: "2026-10-15", estimatedAmount: 0, orderComment: "" }),
+    shared,
+    Object.freeze({ ...shared, estimatedAmount: 20 }),
+    exceptionOrder,
+  ]);
+  const snapshot = orders.map((order) => ({ ...order }));
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.exceptionWorklist.map(({ rank, resultIndex }) => ({ rank, resultIndex })), [
+    { rank: 1, resultIndex: 2 },
+    { rank: 2, resultIndex: 4 },
+    { rank: 3, resultIndex: 0 },
+    { rank: 4, resultIndex: 3 },
+    { rank: 5, resultIndex: 5 },
+  ]);
+  assert.equal(batch.exceptionWorklist.length, batch.summary.exceptionCount);
+  assert.deepEqual(batch.exceptionWorklist, batch.exceptionPriorities.map(({ rank, resultIndex }) => {
+    const result = batch.results[resultIndex]!;
+    assert.equal(result.status, "EXCEPTION");
+    return { rank, resultIndex, orderId: result.orderId, orderDetails: result.orderDetails, reasonCodes: result.reasonCodes, exceptionGuides: result.exceptionGuides };
+  }));
+  for (const item of batch.exceptionWorklist) {
+    assert.deepEqual(Object.keys(item).sort(), ["exceptionGuides", "orderDetails", "orderId", "rank", "reasonCodes", "resultIndex"]);
+    assert.deepEqual(item.reasonCodes, reasonCodeOrder);
+    assert.deepEqual(item.exceptionGuides, analyzeOrder(orders[item.resultIndex]!).exceptionGuides);
+    for (const key of ["estimatedAmount", "dueDate", "orderComment"] as const) {
+      assert.equal(Object.prototype.hasOwnProperty.call(item.orderDetails, key), item.resultIndex !== 5);
+    }
+  }
+  assert.deepEqual(batch.exceptionWorklist[0]!.orderDetails, {
+    materialId: "M-002", orderQuantity: 0, customerId: "C-002",
+    estimatedAmount: 0, dueDate: "2026-10-15", orderComment: "",
+  });
+  assert.deepEqual(batch.results.map(({ orderId }) => orderId), orders.map(({ orderId }) => orderId));
+  assert.deepEqual(analyzeOrderBatch(orders), batch);
+  assert.equal(JSON.stringify(analyzeOrderBatch(orders)), JSON.stringify(batch));
+  assert.deepEqual(orders, snapshot);
+});
+
+test("처리 목록은 선택 상세 필드의 생략과 원래 값을 보존한다", () => {
+  const variants: Partial<OrderInput>[] = [
+    {}, { estimatedAmount: 0 }, { dueDate: "미정" }, { orderComment: "" },
+    { estimatedAmount: -1, dueDate: "2026-02-30", orderComment: "  확인\n요청  " },
+  ];
+  for (const details of variants) {
+    const batch = analyzeOrderBatch([{ ...exceptionOrder, ...details }]);
+    const item = batch.exceptionWorklist[0]!;
+    assert.deepEqual(item.orderDetails, {
+      materialId: exceptionOrder.materialId,
+      orderQuantity: exceptionOrder.orderQuantity,
+      customerId: exceptionOrder.customerId,
+      ...details,
+    });
+    for (const key of ["estimatedAmount", "dueDate", "orderComment"] as const) {
+      assert.equal(Object.prototype.hasOwnProperty.call(item.orderDetails, key), Object.prototype.hasOwnProperty.call(details, key));
+    }
+  }
+});
+
+test("처리 목록의 상세, 사유, 가이드 사본은 결과와 다른 항목 및 호출에서 독립적이다", () => {
+  const shared = Object.freeze({ ...exceptionOrder, dueDate: "2026-10-15", estimatedAmount: 100, orderComment: "확인" });
+  const orders = Object.freeze([shared, shared, Object.freeze({ ...shared })]);
+  const inputSnapshot = orders.map((order) => ({ ...order }));
+  const first = analyzeOrderBatch(orders);
+  const second = analyzeOrderBatch(orders);
+  const secondSnapshot = JSON.stringify(second);
+  assert.notStrictEqual(first.exceptionWorklist, second.exceptionWorklist);
+  const items = [...first.exceptionWorklist, ...second.exceptionWorklist];
+  const copies = [...items, ...first.results, ...second.results];
+  copies.forEach((item, index) => {
+    for (const order of orders) assert.notStrictEqual(item.orderDetails, order);
+    for (const other of copies.slice(index + 1)) {
+      assert.notStrictEqual(item, other);
+      assert.notStrictEqual(item.orderDetails, other.orderDetails);
+      assert.notStrictEqual(item.reasonCodes, other.reasonCodes);
+      assert.notStrictEqual(item.exceptionGuides, other.exceptionGuides);
+      for (const guide of item.exceptionGuides) {
+        for (const otherGuide of other.exceptionGuides) assert.notStrictEqual(guide, otherGuide);
+      }
+    }
+  });
+  const changed = first.exceptionWorklist[0]!;
+  Object.assign(changed.orderDetails, {
+    materialId: "CHANGED", orderQuantity: 99, customerId: "CHANGED",
+    estimatedAmount: 0, dueDate: "미정", orderComment: "변경",
+  });
+  changed.reasonCodes.reverse();
+  changed.exceptionGuides[0]!.reasonCode = "CUSTOMER_BLOCKED";
+  changed.exceptionGuides[0]!.check = "변경";
+  changed.exceptionGuides[0]!.action = "변경";
+  changed.exceptionGuides.reverse();
+  changed.rank = 99;
+  changed.resultIndex = 99;
+  changed.orderId = "CHANGED";
+  assert.deepEqual(first.results, second.results);
+  assert.deepEqual(first.summary, second.summary);
+  assert.deepEqual(first.exceptionPriorities, second.exceptionPriorities);
+  assert.deepEqual(first.exceptionWorklist.slice(1), second.exceptionWorklist.slice(1));
+  assert.equal(JSON.stringify(second), secondSnapshot);
+  assert.deepEqual(orders, inputSnapshot);
+  first.exceptionWorklist.reverse();
+  first.exceptionWorklist.length = 0;
+  assert.deepEqual(analyzeOrderBatch(orders), second);
+  const preserved = JSON.stringify(second.exceptionWorklist);
+  second.results[0]!.orderDetails.orderComment = "결과 변경";
+  second.results[0]!.reasonCodes.length = 0;
+  second.results[0]!.exceptionGuides[0]!.check = "결과 변경";
+  second.results[0]!.exceptionGuides.length = 0;
+  second.exceptionPriorities[0]!.rank = 99;
+  assert.equal(JSON.stringify(second.exceptionWorklist), preserved);
+});
+
+test("빈 입력과 정상 입력은 독립적인 빈 처리 목록을 반환한다", () => {
+  const batches = [analyzeOrderBatch([]), analyzeOrderBatch([]), analyzeOrderBatch([normalOrder, normalOrder]), analyzeOrderBatch([normalOrder])];
+  batches.forEach((batch, index) => {
+    assert.deepEqual(batch.exceptionWorklist, []);
+    for (const other of batches.slice(index + 1)) assert.notStrictEqual(batch.exceptionWorklist, other.exceptionWorklist);
+  });
+  batches[0]!.exceptionWorklist.push(analyzeOrderBatch([exceptionOrder]).exceptionWorklist[0]!);
+  for (const batch of batches.slice(1)) assert.deepEqual(batch.exceptionWorklist, []);
+  assert.deepEqual(analyzeOrderBatch([]).exceptionWorklist, []);
+  assert.deepEqual(analyzeOrderBatch([normalOrder]).exceptionWorklist, []);
+});
