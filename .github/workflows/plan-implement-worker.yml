@@ -148,8 +148,16 @@ jobs:
           test -f "$RUNNER_TEMP/plan-worker-input/prompt.md"
           test -f "$RUNNER_TEMP/plan-worker-input/schema.json"
 
+      - name: IMPLEMENT timeout 측정 시작
+        if: steps.source.outputs.should_run == 'true'
+        id: implement_clock
+        shell: bash
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Untrusted bounded IMPLEMENT Worker
         if: steps.source.outputs.should_run == 'true'
+        id: implement0
+        continue-on-error: true
         timeout-minutes: 4
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
@@ -167,10 +175,75 @@ jobs:
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
-      - name: Worker input 제거
-        if: steps.source.outputs.should_run == 'true'
+      - name: IMPLEMENT timeout 재시도 분류
+        if: always() && steps.source.outputs.should_run == 'true'
+        id: timeout0
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home"
+        env:
+          IMPLEMENT_OUTCOME: ${{ steps.implement0.outcome }}
+          STARTED_AT: ${{ steps.implement_clock.outputs.started_at }}
+          RAW_PROPOSAL: ${{ runner.temp }}/worker-output/raw-proposal.json
+        run: |
+          set -euo pipefail
+          now="$(date +%s)"
+          elapsed="$((now - STARTED_AT))"
+          has_output=false
+          if [ -s "$RAW_PROPOSAL" ]; then has_output=true; fi
+
+          echo "elapsed_seconds=${elapsed}" >> "$GITHUB_OUTPUT"
+          echo "has_output=${has_output}" >> "$GITHUB_OUTPUT"
+
+          if [ "$IMPLEMENT_OUTCOME" = "failure" ] && [ "$elapsed" -ge 230 ] && [ "$has_output" = "false" ]; then
+            echo "retry=true" >> "$GITHUB_OUTPUT"
+            echo "첫 IMPLEMENT가 timeout 경계에서 output 없이 실패해 bounded retry 1회를 허용합니다."
+          else
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Untrusted bounded IMPLEMENT timeout retry
+        if: steps.timeout0.outputs.retry == 'true'
+        id: implement0_retry
+        continue-on-error: true
+        timeout-minutes: 6
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+        with:
+          openai-api-key: ${{ secrets.CODEX_API_KEY }}
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          working-directory: ${{ runner.temp }}/worker-neutral
+          codex-home: ${{ runner.temp }}/worker-codex-home-timeout-retry
+          prompt-file: ${{ runner.temp }}/plan-worker-input/prompt.md
+          output-schema-file: ${{ runner.temp }}/plan-worker-input/schema.json
+          output-file: ${{ runner.temp }}/worker-output/raw-proposal.json
+          effort: low
+          codex-args: '["-c","project_doc_max_bytes=0"]'
+
+      - name: bounded IMPLEMENT 실행 결과 확인
+        if: always() && steps.source.outputs.should_run == 'true'
+        id: implement_gate
+        shell: bash
+        env:
+          INITIAL_OUTCOME: ${{ steps.implement0.outcome }}
+          RETRY_REQUIRED: ${{ steps.timeout0.outputs.retry }}
+          RETRY_OUTCOME: ${{ steps.implement0_retry.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$INITIAL_OUTCOME" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RETRY_REQUIRED" = "true" ] && [ "$RETRY_OUTCOME" = "success" ]; then
+            exit 0
+          fi
+          echo "bounded IMPLEMENT failed; no further infrastructure retry is allowed" >&2
+          exit 1
+
+      - name: Worker input 제거
+        if: steps.source.outputs.should_run == 'true' && steps.implement_gate.outcome == 'success'
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
       - name: Trusted validation checkout 0
         if: steps.source.outputs.should_run == 'true'
