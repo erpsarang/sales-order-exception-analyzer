@@ -47,7 +47,7 @@ test("PLAN Worker는 timeout 경계 failure만 fresh runner에서 1회 bounded �
 });
 
 
-test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록하고 아직 자동 Resume하지 않는다", () => {
+test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () => {
   assert.match(workflow, /source_run_id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
   assert.match(workflow, /source_run_attempt: \$\{\{ steps\.source\.outputs\.run_attempt \}\}/);
   assert.match(workflow, /\n      issues: write\n/);
@@ -58,6 +58,20 @@ test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록하고 아�
   assert.match(workflow, /base-sha=/);
   assert.match(workflow, /reason=INFRA_FAILURE/);
   assert.match(workflow, /exact STALLED_WORKER marker already exists/);
-  assert.match(workflow, /자동 Resume은 아직 수행하지 않습니다/);
-  assert.doesNotMatch(workflow, /workflow_id: 'plan-implement-worker\.yml'/);
+  assert.match(workflow, /Trusted Recovery Preflight가 PASS하면 Worker가 자동 재진입합니다/);
+});
+
+test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Worker에 자동 재진입한다", () => {
+  assert.match(workflow, /Trusted PLAN IMPLEMENT Handoff.*,.*Trusted Worker Recovery Preflight/);
+  assert.match(workflow, /name: RECOVERY_READY artifact 다운로드/);
+  assert.match(workflow, /name: RECOVERY_READY artifact 다운로드[\s\S]*run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
+  assert.match(workflow, /kind === 'trusted-worker-recovery-ready'/);
+  assert.match(workflow, /preflight\?\.workflowPath === '\.github\/workflows\/plan-worker-recovery-preflight\.yml'/);
+  assert.match(workflow, /recovery\.preflight\?\.runId === run\.id/);
+  assert.match(workflow, /branch\.commit\.sha === run\.head_sha/);
+  assert.match(workflow, /recovery_kind', 'trusted-recovery-compare-v1'/);
+  assert.match(workflow, /RECOVERY_GUARD_KIND:/);
+  assert.match(workflow, /run-id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
+  assert.match(workflow, /run-id: \$\{\{ needs\.attempt0\.outputs\.source_run_id \}\}/);
+  assert.match(workflow, /run-id: \$\{\{ needs\.attempt0_result\.outputs\.source_run_id \}\}/);
 });
