@@ -109,6 +109,12 @@ test("untrusted FIX Worker에는 write credential과 push/Merge 경로가 없다
   assert.doesNotMatch(workerJob, /contents: write|pull-requests: write|issues: write|git push|gh pr|mergePullRequest/);
 });
 
+test("FIX Worker는 Terra + no reasoning을 명시 고정한다", () => {
+  assert.match(workerJob, /model: gpt-5\.6-terra/);
+  assert.match(workerJob, /effort: none/);
+  assert.doesNotMatch(workerJob, /model: gpt-6-astra/);
+});
+
 test("untrusted FIX Codex는 github-actions[bot]만 exact allowlist하고 전체 bot 허용은 금지한다", () => {
   assert.match(workerJob, /allow-bot-users: "github-actions\[bot\]"/);
   assert.doesNotMatch(workerJob, /allow-bots:\s*true/);
