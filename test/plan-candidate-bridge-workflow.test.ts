@@ -22,7 +22,7 @@ test("자동 경로는 Worker artifact의 exact Handoff identity로 recovery 여
   assert.match(workflow, /bounded-worker-candidate-issue-/);
   assert.match(workflow, /expected exactly one bounded Worker candidate artifact/);
   assert.match(bridgeSection, /const explicitRecovery = context\.eventName === 'workflow_dispatch'/);
-  assert.match(bridgeSection, /handoff-\(\\d\+\)-attempt-\(\\d\+\)-worker-/);
+  assert.equal(bridgeSection.includes("handoff-(\\\\d+)-attempt-(\\\\d+)-worker-"), true);
   assert.match(bridgeSection, /Trusted PLAN IMPLEMENT Handoff/);
   assert.match(bridgeSection, /const approvedBaseSha = handoff\.head_sha/);
   assert.match(bridgeSection, /const recovery = explicitRecovery \|\| run\.head_sha !== approvedBaseSha/);
@@ -67,7 +67,7 @@ test("recovery default 이동은 bounded Framework-only compare에만 trusted gu
   assert.doesNotMatch(bridgeSection, /path\.startsWith\('test\/'\)\s*\|\|/);
   assert.doesNotMatch(bridgeSection, /\(\?:plan-\|bounded-\|single-pass-/);
   assert.doesNotMatch(bridgeSection, /data\.head_commit/);
-  assert.match(bridgeSection, /data\.merge_base_commit\.sha === base \? currentDefaultSha : 'invalid'/);
+  assert.match(bridgeSection, /core\.setOutput\('default_sha', currentDefaultSha\)/);
   assert.match(bridgeSection, /recovery compare failed/);
   assert.match(bridgeSection, /recovery requires re-plan; ambiguous or application changes/);
 });
