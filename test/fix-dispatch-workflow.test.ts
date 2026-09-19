@@ -47,7 +47,7 @@ test("FIX Request trusted job은 source Trusted Rail completion과 exact REVIEW 
 
 test("FIX Request는 source REVIEW 이후 Framework-only drift만 bounded recovery로 허용한다", () => {
   assert.match(requestJob, /currentBranch\.commit\.sha !== context\.sha/);
-  assert.match(requestJob, /basehead: \`\\\$\{sourceRun\.head_sha\}\.\.\.\\\$\{context\.sha\}\`/);
+  assert.ok(requestJob.includes("basehead: `${sourceRun.head_sha}...${context.sha}`"));
   assert.match(requestJob, /drift\.merge_base_commit\.sha !== sourceRun\.head_sha/);
   assert.match(requestJob, /driftFiles\.length > 14/);
   assert.match(requestJob, /allowedFrameworkDrift = new Set/);
