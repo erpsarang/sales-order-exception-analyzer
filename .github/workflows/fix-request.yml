@@ -83,6 +83,7 @@ jobs:
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
 
+            const defaultBranch = context.payload.repository.default_branch;
             const allowedEvent =
               sourceRun?.event === 'workflow_run' || sourceRun?.event === 'workflow_dispatch';
             if (
@@ -91,8 +92,8 @@ jobs:
               sourceRun.path !== '.github/workflows/trusted-rail.yml' ||
               sourceRun.conclusion !== 'success' ||
               !allowedEvent ||
-              sourceRun.head_branch !== context.payload.repository.default_branch ||
-              sourceRun.head_sha !== context.sha ||
+              sourceRun.head_branch !== defaultBranch ||
+              !/^[0-9a-f]{40,64}$/.test(sourceRun.head_sha || '') ||
               reviewAttempt > sourceRun.run_attempt
             ) {
               core.setFailed(
@@ -100,6 +101,66 @@ jobs:
               );
               return;
             }
+
+            const { data: currentBranch } = await github.rest.repos.getBranch({
+              ...context.repo,
+              branch: defaultBranch,
+            });
+            if (
+              context.ref !== `refs/heads/${defaultBranch}` ||
+              currentBranch.commit.sha !== context.sha
+            ) {
+              core.setFailed('FIX Request trusted code is not exact current default branch');
+              return;
+            }
+
+            const { data: drift } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo,
+              basehead: `${sourceRun.head_sha}...${context.sha}`,
+              per_page: 100,
+            });
+            const driftFiles = drift.files;
+            if (
+              !['ahead', 'identical'].includes(drift.status) ||
+              drift.merge_base_commit.sha !== sourceRun.head_sha ||
+              !Array.isArray(driftFiles) ||
+              driftFiles.length > 14
+            ) {
+              core.setFailed('FIX recovery drift is not a bounded ancestor diff');
+              return;
+            }
+
+            const allowedFrameworkDrift = new Set([
+              '.github/workflows/fix-request.yml',
+              '.github/workflows/fix-worker.yml',
+              '.github/workflows/implement.yml',
+              '.github/workflows/learn.yml',
+              '.github/workflows/plan-implement-worker.yml',
+              '.github/workflows/plan.yml',
+              '.github/workflows/semantic-review.yml',
+              'src/self-improvement/plan-implement-worker-handler.ts',
+              'src/self-improvement/plan-implement-worker.ts',
+              'test/fix-dispatch-workflow.test.ts',
+              'test/plan-implement-worker-workflow.test.ts',
+              'test/plan-implement-worker.test.ts',
+            ]);
+            const rejectedDrift = driftFiles.filter(
+              (file) =>
+                !['added', 'modified'].includes(file.status) ||
+                !allowedFrameworkDrift.has(file.filename) ||
+                file.previous_filename,
+            );
+            if (rejectedDrift.length > 0) {
+              core.setFailed(
+                `FIX recovery requires fresh PLAN; non-approved drift: ${rejectedDrift
+                  .map((file) => `${file.status}:${file.filename}`)
+                  .join(',')}`,
+              );
+              return;
+            }
+            core.info(
+              `FIX recovery drift verified: source=${sourceRun.head_sha}, current=${context.sha}, files=${driftFiles.length}`,
+            );
 
             const { data } = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner,
