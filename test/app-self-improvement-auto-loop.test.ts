@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const bootstrap = await readFile(".github/workflows/app-self-improvement.yml", "utf8");
-const learnBridge = await readFile(".github/workflows/learn-auto-bridge.yml", "utf8");
-const candidateBridge = await readFile(".github/workflows/candidate-auto-bridge.yml", "utf8");
+const learnSource = await readFile(".github/workflows/learn-source.yml", "utf8");
+const learn = await readFile(".github/workflows/learn.yml", "utf8");
+const candidate = await readFile(".github/workflows/improvement-candidate.yml", "utf8");
 const orchestrator = await readFile(".github/workflows/orchestrator.yml", "utf8");
 
 test("App Self-Improvement는 실제 Human Merge PR close에서만 bootstrap된다", () => {
@@ -44,35 +45,51 @@ test("bootstrap은 LEARN Source만 dispatch하며 구현/merge를 시작하지 �
   assert.doesNotMatch(bootstrap, /pulls\.merge|enablePullRequestAutoMerge|git\s+push/);
 });
 
-test("LEARN Bridge는 Trusted LEARN Source가 완전히 성공한 뒤 exact artifacts로 LEARN을 시작한다", () => {
-  assert.match(learnBridge, /workflow_run:/);
-  assert.match(learnBridge, /workflows: \["Trusted LEARN Source"\]/);
-  assert.match(learnBridge, /types: \[completed\]/);
-  assert.match(learnBridge, /workflow_run\.conclusion == 'success'/);
-  assert.match(learnBridge, /run\.path !== '\.github\/workflows\/learn-source\.yml'/);
-  assert.match(learnBridge, /completed-cycle-issue-/);
-  assert.match(learnBridge, /learn-input-issue-/);
-  assert.match(learnBridge, /completed\.length !== 1 \|\| input\.length !== 1/);
-  assert.match(learnBridge, /workflow_id: 'learn\.yml'/);
+test("Trusted LEARN Source는 source job 성공 뒤 LEARN을 workflow_dispatch한다", () => {
+  assert.match(learnSource, /\n  dispatch_learn:\n/);
+  assert.match(learnSource, /needs: source/);
+  assert.match(learnSource, /needs\.source\.result == 'success'/);
+  assert.match(learnSource, /actions: write/);
+  assert.match(learnSource, /workflow_id: 'learn\.yml'/);
+  assert.match(learnSource, /source_run_id: process\.env\.SOURCE_RUN_ID/);
+  assert.match(learnSource, /completed_cycle_artifact_name: process\.env\.COMPLETED_CYCLE_ARTIFACT_NAME/);
+  assert.match(learnSource, /learn_input_artifact_name: process\.env\.LEARN_INPUT_ARTIFACT_NAME/);
 });
 
-test("Candidate Bridge는 LEARN completed success의 exact report에서 source identity를 추출한다", () => {
-  assert.match(candidateBridge, /workflow_run:/);
-  assert.match(candidateBridge, /workflows: \["Read-only AI LEARN"\]/);
-  assert.match(candidateBridge, /types: \[completed\]/);
-  assert.match(candidateBridge, /run\.path !== '\.github\/workflows\/learn\.yml'/);
-  assert.match(candidateBridge, /learn-report-issue-/);
-  assert.match(candidateBridge, /reports\.length !== 1/);
-  assert.match(candidateBridge, /report\?\.source\?\.inputPack/);
-  assert.match(candidateBridge, /learn-input-issue-/);
-  assert.match(candidateBridge, /workflow_id: 'improvement-candidate\.yml'/);
+test("LEARN은 dispatch race를 bounded wait한 뒤 source completed-success를 exact 검증한다", () => {
+  assert.match(learn, /for \(let poll = 0; poll < 12; poll \+= 1\)/);
+  assert.match(learn, /await sleep\(5000\)/);
+  assert.match(learn, /source run must reach exact completed success within bounded wait/);
+  assert.match(learn, /run\.path !== '\.github\/workflows\/learn-source\.yml'/);
+  assert.match(learn, /run\.head_branch !== context\.payload\.repository\.default_branch/);
+});
+
+test("validated LEARN은 Candidate를 workflow_dispatch하고 Candidate가 LEARN completed-success를 bounded wait한다", () => {
+  assert.match(learn, /\n  dispatch_candidate:\n/);
+  assert.match(learn, /needs: \[prepare, finalize\]/);
+  assert.match(learn, /needs\.finalize\.result == 'success'/);
+  assert.match(learn, /workflow_id: 'improvement-candidate\.yml'/);
+  assert.match(learn, /LEARN_REPORT_ARTIFACT_NAME: \$\{\{ needs\.finalize\.outputs\.report_artifact_name \}\}/);
+
+  assert.match(candidate, /for \(let poll = 0; poll < 12; poll \+= 1\)/);
+  assert.match(candidate, /must reach exact completed success within bounded wait/);
+  assert.match(candidate, /'\.github\/workflows\/learn\.yml'/);
+  assert.match(candidate, /'\.github\/workflows\/learn-source\.yml'/);
+});
+
+test("GITHUB_TOKEN 재귀 방지에 취약한 workflow_run bridge는 제거한다", async () => {
+  await assert.rejects(access(".github/workflows/learn-auto-bridge.yml"));
+  await assert.rejects(access(".github/workflows/candidate-auto-bridge.yml"));
+  assert.doesNotMatch(learnSource, /workflow_run:/);
+  assert.doesNotMatch(learn, /workflow_run:/);
 });
 
 test("자동 loop는 Candidate까지만 가며 Human authority 경계를 유지한다", () => {
-  for (const workflow of [bootstrap, learnBridge, candidateBridge]) {
+  for (const workflow of [bootstrap, learnSource, learn, candidate]) {
     assert.match(workflow, /permissions: \{\}/);
-    assert.doesNotMatch(workflow, /pull-requests: write|issues: write|contents: write/);
-    assert.doesNotMatch(workflow, /pulls\.create|pulls\.merge|enablePullRequestAutoMerge|git\s+push/);
+    assert.doesNotMatch(workflow, /pulls\.merge|enablePullRequestAutoMerge|git\s+push/);
   }
-  assert.doesNotMatch(candidateBridge, /workflow_id: 'plan\.yml'|workflow_id: 'implement\.yml'/);
+  assert.doesNotMatch(learnSource, /workflow_id: 'plan\.yml'|workflow_id: 'implement\.yml'/);
+  assert.doesNotMatch(learn, /workflow_id: 'plan\.yml'|workflow_id: 'implement\.yml'/);
+  assert.doesNotMatch(candidate, /workflow_id: 'plan\.yml'|workflow_id: 'implement\.yml'/);
 });
