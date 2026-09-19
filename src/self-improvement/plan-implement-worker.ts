@@ -246,8 +246,9 @@ export function createWorkerCandidateProvenance(input: {
   readonly workerRunId: number;
   readonly workerRunAttempt: number;
   readonly candidate: CandidateChangeSet;
+  readonly recoveryGuard?: PlanImplementWorkerRecoveryGuard;
 }): WorkerCandidateProvenance {
-  validatePlanImplementWorkerSource(input.bundle, input.source, input.sourceArtifact);
+  validatePlanImplementWorkerSource(input.bundle, input.source, input.sourceArtifact, input.recoveryGuard);
   positiveInteger("worker run id", input.workerRunId);
   positiveInteger("worker run attempt", input.workerRunAttempt);
   verifyCandidateChangeSet(input.candidate, input.bundle.contract, input.bundle.context);
