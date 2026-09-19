@@ -164,11 +164,13 @@ jobs:
 
             const allowedFiles = new Set([
               '.github/workflows/plan-implement-worker.yml',
+              '.github/workflows/plan-worker-recovery-preflight.yml',
               'test/plan-implement-worker-workflow.test.ts',
+              'test/plan-worker-recovery-preflight-workflow.test.ts',
             ]);
             const rejected = files.filter(
               (file) =>
-                file.status !== 'modified' ||
+                !['added', 'modified'].includes(file.status) ||
                 !allowedFiles.has(file.filename) ||
                 file.previous_filename,
             );
