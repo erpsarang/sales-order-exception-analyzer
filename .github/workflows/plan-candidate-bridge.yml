@@ -242,6 +242,9 @@ jobs:
               'test/fix-dispatch-workflow.test.ts',
               'test/plan-candidate-bridge-recovery-finalize.test.ts',
               'test/plan-candidate-bridge-recovery-provenance.test.ts',
+              'test/plan-implement-worker-workflow.test.ts',
+              'test/plan-implement-worker.test.ts',
+              'test/plan-worker-recovery-preflight-workflow.test.ts',
               'test/plan-trusted-rail-recovery-source.test.ts',
               'test/seal-workflow.test.ts',
             ]);
