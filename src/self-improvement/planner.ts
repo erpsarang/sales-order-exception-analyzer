@@ -261,6 +261,13 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
     if (candidate && !selected.some((entry) => entry.path === candidate.path) && selected.length < maxFiles) selected.push(candidate);
   };
 
+  // Exact repository paths explicitly named in the requirement are trusted context
+  // selection hints. Preserve every readable exact match while the file budget allows,
+  // in requirement order, before lexical relevance can consume those slots.
+  for (const path of pathAnchors) {
+    add(candidates.find((candidate) => candidate.path === path));
+  }
+
   const explicitRuntime = pathAnchors
     .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
     .find((candidate): candidate is T => candidate !== undefined);

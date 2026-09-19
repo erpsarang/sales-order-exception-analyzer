@@ -121,3 +121,52 @@ test("workflow-only anchor outranks test and docs when no runtime source defines
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("요구에 명시된 여러 exact path는 lexical noise보다 먼저 budget 안에 모두 보존된다", () => {
+  const root = mkdtempSync(join(tmpdir(), "planner-explicit-paths-"));
+  try {
+    mkdirSync(join(root, "src", "self-improvement"), { recursive: true });
+    mkdirSync(join(root, "test"));
+
+    writeFileSync(join(root, "src", "order-analysis.ts"), "export const order = 'exceptionGuides';\n");
+    writeFileSync(join(root, "test", "order-analysis.test.ts"), "import '../src/order-analysis.js';\n");
+    writeFileSync(join(root, "test", "batch-order-analysis.test.ts"), "export const batch = true;\n");
+    writeFileSync(join(root, "src", "app-evidence.ts"), "export const budget = 8192;\n");
+    writeFileSync(join(root, "test", "app-evidence.test.ts"), "import '../src/app-evidence.js';\n");
+    writeFileSync(
+      join(root, "src", "self-improvement", "planner.ts"),
+      "PLAN implementationScope Runtime Evidence exceptionGuides bounded budget ".repeat(200),
+    );
+    writeFileSync(
+      join(root, "test", "planner-noise.test.ts"),
+      "PLAN Runtime Evidence exceptionGuides bounded budget ".repeat(200),
+    );
+
+    const requirement = [
+      "이전 PLAN allowedPaths는 `src/order-analysis.ts`, `test/order-analysis.test.ts`, `test/batch-order-analysis.test.ts`였다.",
+      "Runtime Evidence 실패는 `src/app-evidence.ts`와 `test/app-evidence.test.ts`를 반드시 확인해야 한다.",
+    ].join("\n");
+
+    const pack = selectPlanContext(
+      requirement,
+      root,
+      "example/orders",
+      "e".repeat(40),
+      { maxFiles: 6, maxBytes: 24_000, maxFileBytes: 4_000 },
+    );
+    const paths = pack.files.map((file) => file.path);
+
+    assert.deepEqual(paths.slice(0, 5), [
+      "src/order-analysis.ts",
+      "test/order-analysis.test.ts",
+      "test/batch-order-analysis.test.ts",
+      "src/app-evidence.ts",
+      "test/app-evidence.test.ts",
+    ]);
+    assert.ok(paths.length <= 6);
+    assert.ok(pack.totalBytes <= 24_000);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
