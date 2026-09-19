@@ -231,7 +231,7 @@ jobs:
           if-no-files-found: error
 
       - name: Worker input 제거
-        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
         shell: bash
         run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
@@ -321,7 +321,7 @@ jobs:
         run: node --import tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
 
       - name: attempt 0 state 정리
-        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.timeout0.outputs.retry != 'true' && steps.ci0.outcome == 'success'
+        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.ci0.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -336,7 +336,7 @@ jobs:
           fi
 
       - name: attempt 0 state artifact 저장
-        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.timeout0.outputs.retry != 'true' && steps.ci0.outcome == 'success'
+        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.ci0.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: bounded-worker-state-0-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -506,6 +506,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
+      should_run: ${{ steps.effective.outputs.should_run }}
       ci_status: ${{ steps.effective.outputs.ci_status }}
       repair_ready: ${{ steps.effective.outputs.repair_ready }}
       repair_blocked_reason: ${{ steps.effective.outputs.repair_blocked_reason }}
@@ -521,6 +522,7 @@ jobs:
         id: effective
         shell: bash
         env:
+          SHOULD_RUN: ${{ needs.attempt0.outputs.should_run }}
           ATTEMPT0_RESULT: ${{ needs.attempt0.result }}
           RETRY_REQUIRED: ${{ needs.attempt0.outputs.retry_required }}
           RETRY_RESULT: ${{ needs.timeout_retry.result }}
@@ -561,6 +563,7 @@ jobs:
           fi
 
           {
+            echo "should_run=$SHOULD_RUN"
             echo "ci_status=$ci_status"
             echo "repair_ready=$repair_ready"
             echo "repair_blocked_reason=$repair_blocked_reason"
