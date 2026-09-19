@@ -3,6 +3,9 @@ import test from "node:test";
 import { createPlanAuthorizeArtifact } from "../src/self-improvement/plan-authorization.js";
 import {
   classifyPlanRecovery,
+  countAutomaticPlanRecoveries,
+  MAX_AUTO_REPLAN_PER_AUTHORIZATION,
+  planRecoveryBudgetStopMarker,
   planRecoveryMarker,
   type PlanRunObservation,
 } from "../src/self-improvement/plan-recovery.js";
@@ -109,4 +112,25 @@ test("recovery marker는 authorization과 current default SHA에 결합된다", 
   assert.match(first, /authorization-digest=1{64}/);
   assert.match(first, /target-sha=2{40}/);
   assert.throws(() => planRecoveryMarker("bad", "2".repeat(40)), /authorization digest/);
+});
+
+
+test("동일 authorization의 자동 re-PLAN은 최대 2회로 계수한다", () => {
+  const digest = "4".repeat(64);
+  const bodies = [
+    planRecoveryMarker(digest, "5".repeat(40)),
+    planRecoveryMarker(digest, "6".repeat(40)),
+    planRecoveryMarker("7".repeat(64), "8".repeat(40)),
+  ];
+  assert.equal(MAX_AUTO_REPLAN_PER_AUTHORIZATION, 2);
+  assert.equal(countAutomaticPlanRecoveries(bodies, digest), 2);
+  assert.equal(countAutomaticPlanRecoveries([], digest), 0);
+});
+
+test("budget STOP marker는 authorization에만 결합되어 target SHA 변경에도 유지된다", () => {
+  const digest = "9".repeat(64);
+  const marker = planRecoveryBudgetStopMarker(digest);
+  assert.match(marker, /AUTO_REPLAN_STOP/);
+  assert.match(marker, /authorization-digest=9{64}/);
+  assert.doesNotMatch(marker, /target-sha=/);
 });
