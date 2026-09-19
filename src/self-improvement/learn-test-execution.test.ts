@@ -312,6 +312,53 @@ for (const mutation of ["digest", "exit", "signal", "empty", "base", "candidate"
   });
 }
 
+test("LEARN FIX cycle은 최초 PLAN validation을 최종 FIX test-execution으로 재사용하지 않는다", () => {
+  const f = executionFixture();
+  const seal = f.seal as unknown as Record<string, any>;
+  const publish = f.publish as unknown as Record<string, any>;
+  const fixBaseSha = "9".repeat(40);
+  const fixPatchDigest = "sha256:" + "8".repeat(64);
+
+  seal.baseSha = fixBaseSha;
+  seal.sealedPatchDigest = fixPatchDigest;
+  seal.sourceFix = {
+    workflowPath: ".github/workflows/fix-worker.yml",
+    runId: 452,
+    runAttempt: 1,
+    controlPlaneSha: targetSha,
+    candidateArtifactName: "implement-candidate-451-452-attempt-1",
+    candidatePatchDigest: fixPatchDigest,
+    fixAttempt: 1,
+    sourceReview: {
+      artifactName: "review-provenance-issue-83-450-attempt-1",
+      runId: 450,
+      runAttempt: 1,
+      reviewedBranch: "ai-publish/issue-83",
+      reviewedHeadSha: fixBaseSha,
+      requirementsDigest: reqDigest,
+      findingsDigest: "sha256:" + "7".repeat(64),
+    },
+    sourceRequest: {
+      workflowPath: ".github/workflows/fix-request.yml",
+      runId: 451,
+      runAttempt: 1,
+      artifactName: "fix-request-450-fix-1-451-attempt-1",
+      trustedCodeSha: targetSha,
+    },
+    aiExecution: {
+      provider: "openai-codex-action",
+      resultId: "codex-action-fix:452:1",
+    },
+  };
+  publish.baseSha = fixBaseSha;
+
+  const result = createTrustedLearnSourceArtifacts(f.facts, f.orchestration);
+  verifyLearnInputPack(result.learnInputPack, result.completedCycle);
+  assert.equal(result.learnInputPack.evidence.some(e => e.kind === "test-execution"), false);
+  assert.equal(result.learnInputPack.evidence.some(e => e.kind === "final-review"), true);
+  assert.equal(result.learnInputPack.evidence.some(e => e.kind === "orchestration"), true);
+});
+
 test("LEARN does not invent execution evidence when provenance is absent", () => {
   const f = executionFixture();
   delete (f.orchestration.sourceReview as Partial<typeof f.orchestration.sourceReview>).sourceVerify;
