@@ -61,6 +61,7 @@ jobs:
                 if (!match) return null;
                 return {
                   commentId: comment.id,
+                  createdAt: comment.created_at,
                   issueNumber: Number(match[1]),
                   handoffRunId: Number(match[2]),
                   handoffRunAttempt: Number(match[3]),
@@ -72,15 +73,42 @@ jobs:
               })
               .filter(Boolean);
 
-            if (stalled.length !== 1) {
-              core.setFailed(`expected exactly one STALLED_WORKER marker; actual=${stalled.length}`);
+            if (stalled.length === 0) {
+              core.setFailed('expected at least one STALLED_WORKER marker');
               return;
             }
-            const source = stalled[0];
-            if (source.issueNumber !== issueNumber) {
+            if (stalled.some((entry) => entry.issueNumber !== issueNumber)) {
               core.setFailed('STALLED_WORKER issue identity mismatch');
               return;
             }
+            if (stalled.some((entry) => !entry.createdAt || !Number.isFinite(Date.parse(entry.createdAt)))) {
+              core.setFailed('STALLED_WORKER comment timestamp missing');
+              return;
+            }
+
+            const cycleKeys = new Set(
+              stalled.map((entry) =>
+                JSON.stringify([
+                  entry.handoffRunId,
+                  entry.handoffRunAttempt,
+                  entry.handoffArtifactName,
+                  entry.baseSha,
+                ]),
+              ),
+            );
+            if (cycleKeys.size !== 1) {
+              core.setFailed(`expected exactly one STALLED Handoff cycle; actual=${cycleKeys.size}`);
+              return;
+            }
+
+            stalled.sort((a, b) => {
+              const timeDiff = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+              return timeDiff !== 0 ? timeDiff : b.commentId - a.commentId;
+            });
+            const source = stalled[0];
+            core.info(
+              `selected latest STALLED_WORKER marker comment=${source.commentId} worker=${source.workerRunId}/${source.workerRunAttempt}`,
+            );
 
             const defaultBranch = context.payload.repository.default_branch;
             const { data: branch } = await github.rest.repos.getBranch({
@@ -105,9 +133,35 @@ jobs:
               worker.conclusion !== 'failure' ||
               worker.run_attempt !== source.workerRunAttempt ||
               worker.head_branch !== defaultBranch ||
-              worker.head_sha !== source.baseSha
+              !/^[0-9a-f]{40,64}$/.test(worker.head_sha || '')
             ) {
               core.setFailed('STALLED_WORKER source Worker identity mismatch');
+              return;
+            }
+
+            const { data: baseToWorker } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo,
+              basehead: `${source.baseSha}...${worker.head_sha}`,
+              per_page: 100,
+            });
+            if (
+              !['ahead', 'identical'].includes(baseToWorker.status) ||
+              baseToWorker.merge_base_commit.sha !== source.baseSha
+            ) {
+              core.setFailed('STALLED_WORKER source Worker is outside approved-base ancestry');
+              return;
+            }
+
+            const { data: workerToCurrent } = await github.rest.repos.compareCommitsWithBasehead({
+              ...context.repo,
+              basehead: `${worker.head_sha}...${currentDefaultSha}`,
+              per_page: 100,
+            });
+            if (
+              !['ahead', 'identical'].includes(workerToCurrent.status) ||
+              workerToCurrent.merge_base_commit.sha !== worker.head_sha
+            ) {
+              core.setFailed('STALLED_WORKER source Worker is not an ancestor of current default');
               return;
             }
 
