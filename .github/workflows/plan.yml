@@ -124,6 +124,7 @@ jobs:
           prompt-file: ${{ runner.temp }}/ai-plan/prompt.md
           output-schema-file: ${{ runner.temp }}/ai-plan/schema.json
           output-file: ${{ runner.temp }}/ai-plan/raw-plan.json
+          model: gpt-5.6-terra
           effort: medium
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
