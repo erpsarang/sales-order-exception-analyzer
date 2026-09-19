@@ -81,6 +81,24 @@ test("FIX prepare는 source request가 completed success인지 확인하고 exac
   assert.match(workerPrepare, /FIX base HEAD mismatch/);
 });
 
+test("FIX Worker는 과거 Request provenance와 현재 trusted code SHA를 분리한다", () => {
+  assert.match(workerPrepare, /currentBranch\.commit\.sha !== context\.sha/);
+  assert.ok(workerPrepare.includes("basehead: `${sourceRun.head_sha}...${context.sha}`"));
+  assert.match(workerPrepare, /drift\.merge_base_commit\.sha !== sourceRun\.head_sha/);
+  assert.match(workerPrepare, /driftFiles\.length > 6/);
+  assert.match(workerPrepare, /allowedFrameworkDrift = new Set/);
+  assert.match(workerPrepare, /'\.github\/workflows\/fix-worker\.yml'/);
+  assert.match(workerPrepare, /'src\/self-improvement\/fix-handler\.ts'/);
+  assert.match(workerPrepare, /'test\/fix-dispatch-workflow\.test\.ts'/);
+  assert.match(workerPrepare, /FIX Worker recovery requires fresh FIX Request; non-approved drift/);
+  assert.match(workerPrepare, /core\.setOutput\('head_sha', sourceRun\.head_sha\)/);
+  assert.match(workerPrepare, /core\.setOutput\('trusted_code_sha', context\.sha\)/);
+  assert.match(workerPrepare, /ref: \$\{\{ steps\.source\.outputs\.trusted_code_sha \}\}/);
+  assert.match(workerWorkflow, /source_control_plane_sha: \$\{\{ steps\.source\.outputs\.trusted_code_sha \}\}/);
+  assert.match(workerWorkflow, /source_request_control_plane_sha: \$\{\{ steps\.source\.outputs\.head_sha \}\}/);
+  assert.match(workerRecord, /SOURCE_FIX_REQUEST_CONTROL_PLANE_SHA: \$\{\{ needs\.prepare\.outputs\.source_request_control_plane_sha \}\}/);
+});
+
 test("untrusted FIX Worker에는 write credential과 push/Merge 경로가 없다", () => {
   assert.match(workerJob, /permissions:\n      contents: read\n      actions: read/);
   assert.match(workerJob, /GITHUB_TOKEN: ""/);
