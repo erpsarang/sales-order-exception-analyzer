@@ -114,16 +114,16 @@ jobs:
                 issue.title.startsWith('[사용자 피드백]'),
             );
 
-            if (businessFeedback.length === 0) {
-              core.info('열린 [사용자 피드백] Issue가 없어 이번 cycle은 no-op입니다');
-              core.setOutput('should_run', 'false');
-              return;
-            }
-            if (businessFeedback.length !== 1) {
+            if (businessFeedback.length > 1) {
               core.setFailed(
-                `열린 [사용자 피드백] Issue가 정확히 1개여야 합니다: actual=${businessFeedback.length}`,
+                `열린 [사용자 피드백] Issue는 최대 1개만 자동 선택할 수 있습니다: actual=${businessFeedback.length}`,
               );
               return;
+            }
+            if (businessFeedback.length === 0) {
+              core.info(
+                '열린 [사용자 피드백] Issue가 없어 App Runtime Evidence만으로 기술/품질 LEARN을 시작합니다',
+              );
             }
 
             core.setOutput('should_run', 'true');
@@ -132,7 +132,10 @@ jobs:
             core.setOutput('trusted_rail_run_id', String(trustedRailRunId));
             core.setOutput('trusted_rail_run_attempt', String(trustedRailRunAttempt));
             core.setOutput('orchestration_artifact_name', orchestrationArtifactName);
-            core.setOutput('business_evidence_issue_number', String(businessFeedback[0].number));
+            core.setOutput(
+              'business_evidence_issue_number',
+              businessFeedback.length === 1 ? String(businessFeedback[0].number) : '',
+            );
 
       - name: Trusted LEARN Source 자동 시작
         if: steps.source.outputs.should_run == 'true'
