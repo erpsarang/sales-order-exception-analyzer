@@ -166,7 +166,9 @@ jobs:
               '.github/workflows/plan-implement-worker.yml',
               '.github/workflows/plan-worker-recovery-preflight.yml',
               'src/self-improvement/plan-implement-worker-handler.ts',
+              'src/self-improvement/plan-implement-worker.ts',
               'test/plan-implement-worker-workflow.test.ts',
+              'test/plan-implement-worker.test.ts',
               'test/plan-worker-recovery-preflight-workflow.test.ts',
             ]);
             const rejected = files.filter(
