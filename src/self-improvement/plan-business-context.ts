@@ -35,6 +35,10 @@ function isFrameworkSource(path: string): boolean {
   return path.toLowerCase().startsWith("src/self-improvement/");
 }
 
+function isProjectExecutionContext(path: string): boolean {
+  return path === "package.json";
+}
+
 function walkFiles(target: string, root: string): string[] {
   const absoluteRoot = join(target, root);
   if (!existsSync(absoluteRoot)) return [];
@@ -353,9 +357,16 @@ export function augmentPlanContextWithBusinessRelations(
 
   const candidatePaths = new Set(candidates.map((file) => file.path));
   const retained = context.files.filter((file) => !candidatePaths.has(file.path));
-  const files = [...candidates, ...retained].slice(0, maxFiles);
+  const projectExecutionContext = retained.filter((file) => isProjectExecutionContext(file.path));
+  const ordinaryRetained = retained.filter((file) => !isProjectExecutionContext(file.path));
+
+  // Business source/test 관계를 보강하더라도 1차 selector가 이미 선택한
+  // 프로젝트 실행 설정은 Framework noise보다 우선 보존한다.
+  const selectedCandidates = candidates.slice(0, Math.max(0, maxFiles - projectExecutionContext.length));
+  const files = [...selectedCandidates, ...projectExecutionContext, ...ordinaryRetained].slice(0, maxFiles);
+  const requiredCount = selectedCandidates.length + projectExecutionContext.length;
   let totalBytes = files.reduce((sum, file) => sum + file.byteLength, 0);
-  while (totalBytes > maxBytes && files.length > candidates.length) {
+  while (totalBytes > maxBytes && files.length > requiredCount) {
     const removed = files.pop()!;
     totalBytes -= removed.byteLength;
   }
