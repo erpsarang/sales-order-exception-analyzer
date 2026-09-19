@@ -947,6 +947,8 @@ jobs:
           test -f "$RUNNER_TEMP/repair-input-1/schema.json"
 
       - name: Untrusted bounded IMPLEMENT repair 1
+        id: implement_repair1
+        continue-on-error: true
         timeout-minutes: 4
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
@@ -966,6 +968,7 @@ jobs:
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: repair 1 raw proposal artifact 저장
+        if: steps.implement_repair1.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: bounded-worker-raw-proposal-repair1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -973,10 +976,12 @@ jobs:
           if-no-files-found: error
 
       - name: repair 1 input 제거
+        if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/repair-input-1"
 
       - name: Trusted validation checkout 1
+        if: always()
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -984,6 +989,7 @@ jobs:
           path: control-validate-1
 
       - name: Node 설정
+        if: always()
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -991,10 +997,12 @@ jobs:
           cache-dependency-path: control-validate-1/package-lock.json
 
       - name: Trusted validation dependencies 설치 1
+        if: always()
         working-directory: control-validate-1
         run: npm ci --ignore-scripts
 
       - name: CODEX_HOME persisted bounded IMPLEMENT repair1 usage exact 기록
+        if: steps.implement_repair1.outcome == 'success'
         id: usage1
         working-directory: control-validate-1
         run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
@@ -1007,16 +1015,59 @@ jobs:
           AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair1.json
 
       - name: trusted bounded IMPLEMENT repair1 usage artifact 저장
+        if: steps.implement_repair1.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.usage1.outputs.artifact_name }}
           path: ${{ runner.temp }}/bounded-implement-usage/repair1.json
           if-no-files-found: error
 
+      - name: CODEX_HOME persisted bounded IMPLEMENT repair1 failure usage 관찰
+        if: steps.implement_repair1.outcome == 'failure'
+        id: repair1_failure_usage
+        working-directory: control-validate-1
+        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-1
+          AI_USAGE_STAGE: bounded-implement-repair1
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: repair1
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair1.json
+          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/repair1-failure.json
+
+      - name: trusted bounded IMPLEMENT repair1 failure usage artifact 저장
+        if: steps.repair1_failure_usage.outputs.status == 'recorded'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.repair1_failure_usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/repair1.json
+          if-no-files-found: error
+
+      - name: trusted bounded IMPLEMENT repair1 failure usage unavailable observation 저장
+        if: steps.repair1_failure_usage.outputs.status == 'unavailable'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.repair1_failure_usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage-observation/repair1-failure.json
+          if-no-files-found: error
+
       - name: repair1 CODEX_HOME 제거
         if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/worker-codex-home-repair-1"
+
+      - name: repair1 실행 결과 확인
+        if: always()
+        shell: bash
+        env:
+          REPAIR1_OUTCOME: ${{ steps.implement_repair1.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$REPAIR1_OUTCOME" != "success" ]; then
+            echo "bounded IMPLEMENT repair1 failed after usage observation" >&2
+            exit 1
+          fi
 
       - name: Trusted handoff artifact 재다운로드 1
         uses: actions/download-artifact@v4
