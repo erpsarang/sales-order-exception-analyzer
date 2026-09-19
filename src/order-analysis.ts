@@ -20,10 +20,36 @@ export type ReasonCode =
   | "MATERIAL_BLOCKED"
   | "INSUFFICIENT_STOCK";
 
+export interface ExceptionGuide {
+  reasonCode: ReasonCode;
+  check: string;
+  action: string;
+}
+
 export interface OrderAnalysisResult {
   status: "SHIP_READY" | "EXCEPTION";
   reasonCodes: ReasonCode[];
+  exceptionGuides: ExceptionGuide[];
 }
+
+const exceptionGuideText: Readonly<Record<ReasonCode, Readonly<Omit<ExceptionGuide, "reasonCode">>>> = {
+  INVALID_QUANTITY: {
+    check: "주문수량과 입력 단위 확인",
+    action: "수량을 양수로 정정 후 재분석",
+  },
+  CUSTOMER_BLOCKED: {
+    check: "고객 차단 사유와 해제 요건 확인",
+    action: "해제 가능 여부 확인 후 주문 재분석",
+  },
+  MATERIAL_BLOCKED: {
+    check: "자재 차단 사유와 해제 요건 확인",
+    action: "해제 가능 여부 확인 후 주문 재분석",
+  },
+  INSUFFICIENT_STOCK: {
+    check: "가용재고와 부족 수량 확인",
+    action: "재고 확보 또는 주문수량 조정 후 재분석",
+  },
+};
 
 /** 모든 해당 예외를 정해진 순서로 반환하며 입력을 변경하지 않는다. */
 export function analyzeOrder(order: Readonly<OrderInput>): OrderAnalysisResult {
@@ -38,5 +64,9 @@ export function analyzeOrder(order: Readonly<OrderInput>): OrderAnalysisResult {
   return {
     status: reasonCodes.length === 0 ? "SHIP_READY" : "EXCEPTION",
     reasonCodes,
+    exceptionGuides: reasonCodes.map((reasonCode) => ({
+      reasonCode,
+      ...exceptionGuideText[reasonCode],
+    })),
   };
 }
