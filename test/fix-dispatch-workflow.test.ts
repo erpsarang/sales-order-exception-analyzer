@@ -45,6 +45,19 @@ test("FIX Request trusted job은 source Trusted Rail completion과 exact REVIEW 
   assert.match(requestJob, /expected exactly one source REVIEW artifact/);
 });
 
+test("FIX Request는 source REVIEW 이후 Framework-only drift만 bounded recovery로 허용한다", () => {
+  assert.match(requestJob, /currentBranch\.commit\.sha !== context\.sha/);
+  assert.ok(requestJob.includes("basehead: `${sourceRun.head_sha}...${context.sha}`"));
+  assert.match(requestJob, /drift\.merge_base_commit\.sha !== sourceRun\.head_sha/);
+  assert.match(requestJob, /driftFiles\.length > 14/);
+  assert.match(requestJob, /allowedFrameworkDrift = new Set/);
+  assert.match(requestJob, /'\.github\/workflows\/fix-request\.yml'/);
+  assert.match(requestJob, /'src\/self-improvement\/plan-implement-worker-handler\.ts'/);
+  assert.match(requestJob, /'test\/fix-dispatch-workflow\.test\.ts'/);
+  assert.match(requestJob, /FIX recovery requires fresh PLAN; non-approved drift/);
+  assert.doesNotMatch(requestJob, /allowedFrameworkDrift\.has\([^)]*\.startsWith/);
+});
+
 test("전용 FIX Worker는 explicit dispatch 입력만 받고 global 권한은 비어 있다", () => {
   assert.match(workerWorkflow, /name: Untrusted FIX Worker/);
   assert.match(workerWorkflow, /workflow_dispatch:/);
