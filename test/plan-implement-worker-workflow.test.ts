@@ -45,3 +45,29 @@ test("PLAN Worker는 timeout 경계 failure만 fresh runner에서 1회 bounded �
   assert.equal((attempt0.match(/uses: openai\/codex-action@/g) ?? []).length, 1);
   assert.doesNotMatch(attempt0, /name: Untrusted bounded IMPLEMENT timeout retry/);
 });
+
+
+test("PLAN Worker recovery는 exact Handoff와 Framework-only guard로만 재개한다", () => {
+  assert.match(workflow, /workflow_dispatch:\n    inputs:\n      source_handoff_run_id:/);
+  assert.match(workflow, /source_handoff_run_attempt:/);
+  assert.match(workflow, /source_handoff_artifact_name:/);
+  assert.match(workflow, /context\.eventName === 'workflow_dispatch'/);
+  assert.match(workflow, /invalid recovery Handoff source run/);
+  assert.match(workflow, /recovery Framework-only trusted compare guard/);
+  assert.match(workflow, /compareCommitsWithBasehead/);
+  assert.match(workflow, /trusted-recovery-compare-v1/);
+  assert.match(workflow, /recovery requires fresh PLAN; ambiguous or application changes/);
+  assert.match(workflow, /TRUSTED_RECOVERY_GUARD_KIND:/);
+  assert.match(workflow, /requirement title\/body changed after PLAN approval/);
+});
+
+test("Worker INFRA_FAILURE는 stalled marker를 남기고 recovery 성공은 explicit Bridge로 전달한다", () => {
+  assert.match(workflow, /INFRA_FAILURE stalled cycle 기록/);
+  assert.match(workflow, /ai-dev-framework:STALLED_WORKER issue=/);
+  assert.match(workflow, /reason=INFRA_FAILURE/);
+  assert.match(workflow, /\n  recovery_bridge_dispatch:\n/);
+  assert.match(workflow, /needs\.attempt0_result\.outputs\.recovery == 'true'/);
+  assert.match(workflow, /workflow_id: 'plan-candidate-bridge\.yml'/);
+  assert.match(workflow, /source_worker_base_sha: baseSha/);
+  assert.doesNotMatch(workflow, /pulls\.merge|enablePullRequestAutoMerge/);
+});
