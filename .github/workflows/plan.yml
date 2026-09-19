@@ -165,6 +165,25 @@ jobs:
             ${{ runner.temp }}/ai-plan/identity.json
           if-no-files-found: error
 
+      - name: CODEX_HOME persisted PLAN usage exact 기록
+        id: usage
+        working-directory: planner-control-validation
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/plan-codex-home
+          AI_USAGE_STAGE: plan
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: plan
+          AI_USAGE_JSON: ${{ runner.temp }}/plan-usage/plan-usage.json
+
+      - name: trusted PLAN usage artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/plan-usage/plan-usage.json
+          if-no-files-found: error
+
   provenance:
     needs: plan
     runs-on: ubuntu-latest
