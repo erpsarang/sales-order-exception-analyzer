@@ -102,6 +102,15 @@ jobs:
           test ! -e planner-control
           test ! -e plan-target
 
+      - name: PLAN AI rerun 비용 상한 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 2 ]; then
+            echo "AI Cost Guardrail: 동일 PLAN run의 AI 호출은 최대 2 attempts만 허용합니다." >&2
+            exit 1
+          fi
+
       - name: Read-only bounded AI Planner
         timeout-minutes: 3
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e

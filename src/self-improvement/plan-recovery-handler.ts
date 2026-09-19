@@ -9,6 +9,9 @@ import {
 } from "./plan-implement-handoff.js";
 import {
   classifyPlanRecovery,
+  countAutomaticPlanRecoveries,
+  MAX_AUTO_REPLAN_PER_AUTHORIZATION,
+  planRecoveryBudgetStopMarker,
   planRecoveryMarker,
   type PlanRunObservation,
 } from "./plan-recovery.js";
@@ -153,7 +156,39 @@ async function main(): Promise<void> {
 
   const marker = planRecoveryMarker(authorization.authorizationDigest, currentDefaultSha);
   const comments = await allComments(owner, repo, authorization.requirement.issueNumber);
-  if (comments.some((comment) => typeof comment.body === "string" && comment.body.includes(marker))) {
+  const commentBodies = comments
+    .map((comment) => typeof comment.body === "string" ? comment.body : "")
+    .filter(Boolean);
+
+  if (commentBodies.some((body) => body.includes(marker))) {
+    output("dispatched", false);
+    return;
+  }
+
+  const recoveryCount = countAutomaticPlanRecoveries(
+    commentBodies,
+    authorization.authorizationDigest,
+  );
+  output("recovery_count", recoveryCount);
+  if (recoveryCount >= MAX_AUTO_REPLAN_PER_AUTHORIZATION) {
+    const stopMarker = planRecoveryBudgetStopMarker(authorization.authorizationDigest);
+    if (!commentBodies.some((body) => body.includes(stopMarker))) {
+      const stopBody = [
+        stopMarker,
+        "## AI Cost Guardrail — 자동 PLAN 복구 중지",
+        `자동 fresh PLAN 복구 ${recoveryCount}회를 이미 사용했습니다.`,
+        `authorization당 상한: ${MAX_AUTO_REPLAN_PER_AUTHORIZATION}회`,
+        "추가 AI PLAN 호출은 자동으로 수행하지 않습니다.",
+        "### HumanStatus: STOPPED",
+        "**현재 상황:** 자동 AI 호출 예산이 소진되어 fail-closed 했습니다.",
+        "**다음 행동:** 같은 요구의 반복 복구보다 원인을 먼저 확인하세요.",
+      ].join("\n\n");
+      await request(
+        `/repos/${owner}/${repo}/issues/${authorization.requirement.issueNumber}/comments`,
+        { method: "POST", body: JSON.stringify({ body: stopBody }) },
+      );
+    }
+    output("budget_exhausted", true);
     output("dispatched", false);
     return;
   }
