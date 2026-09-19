@@ -22,3 +22,18 @@ test("PLAN Worker는 fresh Job 기반 pre-Bridge bounded repair를 포함한다"
   assert.match(workflow, /AI repair blocked by deterministic repair policy/);
   assert.match(workflow, /Validated candidate artifact 저장/);
 });
+
+
+test("PLAN Worker는 timeout 경계 failure만 1회 bounded 자동 재시도한다", () => {
+  assert.match(workflow, /name: IMPLEMENT timeout 측정 시작/);
+  assert.match(workflow, /id: implement0[\s\S]*continue-on-error: true[\s\S]*timeout-minutes: 4/);
+  assert.match(workflow, /name: IMPLEMENT timeout 재시도 분류/);
+  assert.match(workflow, /\[ "\$elapsed" -ge 230 \]/);
+  assert.match(workflow, /\[ "\$has_output" = "false" \]/);
+  assert.match(workflow, /name: Untrusted bounded IMPLEMENT timeout retry/);
+  assert.match(workflow, /steps\.timeout0\.outputs\.retry == 'true'/);
+  assert.match(workflow, /id: implement0_retry[\s\S]*continue-on-error: true[\s\S]*timeout-minutes: 6/);
+  assert.match(workflow, /bounded IMPLEMENT failed; no further infrastructure retry is allowed/);
+  assert.match(workflow, /worker-codex-home-timeout-retry/);
+  assert.equal((workflow.match(/name: Untrusted bounded IMPLEMENT timeout retry/g) ?? []).length, 1);
+});
