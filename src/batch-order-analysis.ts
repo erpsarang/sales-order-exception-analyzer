@@ -11,6 +11,7 @@ const reasonCodeOrder: readonly ReasonCode[] = [
 
 export interface BatchOrderResult extends OrderAnalysisResult {
   orderId: string;
+  orderDetails: Pick<OrderInput, "materialId" | "orderQuantity" | "customerId" | "estimatedAmount" | "dueDate" | "orderComment">;
 }
 
 export interface BatchOrderAnalysisResult {
@@ -47,7 +48,15 @@ export function analyzeOrderBatch(
         reasonCounts[reasonCode] += 1;
       }
     }
-    return { orderId: order.orderId, ...analysis };
+    const orderDetails: BatchOrderResult["orderDetails"] = {
+      materialId: order.materialId,
+      orderQuantity: order.orderQuantity,
+      customerId: order.customerId,
+    };
+    if (order.estimatedAmount !== undefined) orderDetails.estimatedAmount = order.estimatedAmount;
+    if (order.dueDate !== undefined) orderDetails.dueDate = order.dueDate;
+    if (order.orderComment !== undefined) orderDetails.orderComment = order.orderComment;
+    return { orderId: order.orderId, orderDetails, ...analysis };
   });
   const exceptionOrderIds = results
     .filter((result) => result.status === "EXCEPTION")

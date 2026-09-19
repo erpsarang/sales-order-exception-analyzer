@@ -48,6 +48,11 @@ for (const { name, orders, ready, exceptions, exceptionRate, exceptionOrderIds }
     const { results, summary } = analyzeOrderBatch(orders);
     const expectedResults = orders.map((order) => ({
       orderId: order.orderId,
+      orderDetails: {
+        materialId: order.materialId,
+        orderQuantity: order.orderQuantity,
+        customerId: order.customerId,
+      },
       ...analyzeOrder(order),
     }));
     assert.deepEqual(results, expectedResults);
@@ -195,6 +200,11 @@ test("예외 ID만 입력 순서대로 반환하며 중복 ID의 정상 및 예�
   const { results, summary } = analyzeOrderBatch(orders);
   assert.deepEqual(results, orders.map((order) => ({
     orderId: order.orderId,
+    orderDetails: {
+      materialId: order.materialId,
+      orderQuantity: order.orderQuantity,
+      customerId: order.customerId,
+    },
     ...analyzeOrder(order),
   })));
   assert.deepEqual(summary.exceptionOrderIds, ["SO-003", "SO-001", "SO-003", "SO-002"]);
@@ -208,6 +218,11 @@ test("동일 객체 및 동일 주문 ID의 중복 입력을 항목마다 집계
   const { results, summary } = analyzeOrderBatch(orders);
   assert.deepEqual(results, orders.map((order) => ({
     orderId: order.orderId,
+    orderDetails: {
+      materialId: order.materialId,
+      orderQuantity: order.orderQuantity,
+      customerId: order.customerId,
+    },
     ...analyzeOrder(order),
   })));
   assert.deepEqual(summary, {
@@ -240,6 +255,11 @@ test("읽기 전용 입력 배열과 주문 객체를 변경하지 않고 반복
   first.results.reverse();
   assert.deepEqual(analyzeOrderBatch(orders).results, orders.map((order) => ({
     orderId: order.orderId,
+    orderDetails: {
+      materialId: order.materialId,
+      orderQuantity: order.orderQuantity,
+      customerId: order.customerId,
+    },
     ...analyzeOrder(order),
   })));
   assert.deepEqual(orders, snapshot);
@@ -290,4 +310,159 @@ test("빈 입력과 정상 입력의 빈 예외 ID 배열도 호출마다 독립
   assert.deepEqual(normalSecond.summary.exceptionOrderIds, []);
   assert.deepEqual(analyzeOrderBatch([]).summary.exceptionOrderIds, []);
   assert.deepEqual(analyzeOrderBatch([normalOrder]).summary.exceptionOrderIds, []);
+});
+
+test("여섯 업무 상세 값을 보존하며 중복 ID도 입력 항목별로 구분한다", () => {
+  const orders = Object.freeze([
+    Object.freeze({
+      ...normalOrder,
+      estimatedAmount: 1250000,
+      dueDate: "2026-10-15",
+      orderComment: "오전 입고 요청",
+    }),
+    Object.freeze({
+      ...normalOrder,
+      materialId: "M-002",
+      orderQuantity: 5,
+      customerId: "C-002",
+      estimatedAmount: 625000,
+      dueDate: "2026-10-16",
+      orderComment: "오후 입고 요청",
+      customerBlocked: true,
+    }),
+  ]);
+  const snapshot = orders.map((order) => ({ ...order }));
+  const { results, summary } = analyzeOrderBatch(orders);
+  assert.deepEqual(results, [
+    {
+      orderId: "SO-003",
+      orderDetails: {
+        materialId: "M-001",
+        orderQuantity: 10,
+        customerId: "C-001",
+        estimatedAmount: 1250000,
+        dueDate: "2026-10-15",
+        orderComment: "오전 입고 요청",
+      },
+      status: "SHIP_READY",
+      reasonCodes: [],
+    },
+    {
+      orderId: "SO-003",
+      orderDetails: {
+        materialId: "M-002",
+        orderQuantity: 5,
+        customerId: "C-002",
+        estimatedAmount: 625000,
+        dueDate: "2026-10-16",
+        orderComment: "오후 입고 요청",
+      },
+      status: "EXCEPTION",
+      reasonCodes: ["CUSTOMER_BLOCKED"],
+    },
+  ]);
+  assert.deepEqual(summary.exceptionOrderIds, ["SO-003"]);
+  assert.deepEqual(orders, snapshot);
+});
+
+test("선택 상세 필드가 없는 기존 입력과 일부만 있는 입력을 지원한다", () => {
+  const optionalDetails = [
+    {},
+    { estimatedAmount: 0 },
+    { dueDate: "2026-10-15" },
+    { orderComment: "" },
+  ];
+  for (const details of optionalDetails) {
+    const order = { ...normalOrder, ...details };
+    const { results } = analyzeOrderBatch([order]);
+    assert.deepEqual(results[0]!.orderDetails, {
+      materialId: "M-001",
+      orderQuantity: 10,
+      customerId: "C-001",
+      ...details,
+    });
+    for (const key of ["estimatedAmount", "dueDate", "orderComment"] as const) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(results[0]!.orderDetails, key),
+        Object.prototype.hasOwnProperty.call(details, key),
+      );
+    }
+  }
+});
+
+test("선택 상세 값의 유무와 값은 단일 주문 판정 및 배치 집계를 바꾸지 않는다", () => {
+  const orders = [
+    normalOrder,
+    ...singleReasonCases.map(({ overrides }) => ({ ...normalOrder, ...overrides })),
+    exceptionOrder,
+  ];
+  const baseline = analyzeOrderBatch(orders);
+  const variants = [
+    { estimatedAmount: 1250000, dueDate: "2026-10-15", orderComment: "오전 입고 요청" },
+    { estimatedAmount: 0, dueDate: "", orderComment: "" },
+    { estimatedAmount: -1, dueDate: "날짜 미정", orderComment: "  확인\n요청  " },
+  ];
+  for (const details of variants) {
+    const enriched = orders.map((order) => ({ ...order, ...details }));
+    const batch = analyzeOrderBatch(enriched);
+    assert.deepEqual(batch.summary, baseline.summary);
+    enriched.forEach((order, index) => {
+      const expectedAnalysis = analyzeOrder(orders[index]!);
+      assert.deepEqual(analyzeOrder(order), expectedAnalysis);
+      const { orderId, orderDetails, ...analysis } = batch.results[index]!;
+      assert.equal(orderId, orders[index]!.orderId);
+      assert.deepEqual(analysis, expectedAnalysis);
+      assert.equal(orderDetails.estimatedAmount, details.estimatedAmount);
+      assert.equal(orderDetails.dueDate, details.dueDate);
+      assert.equal(orderDetails.orderComment, details.orderComment);
+    });
+  }
+});
+
+test("상세 사본은 입력, 중복 항목 및 반복 호출 사이에서 독립적이다", () => {
+  const order = {
+    ...normalOrder,
+    estimatedAmount: 1250000,
+    dueDate: "2026-10-15",
+    orderComment: "오전 입고 요청",
+  };
+  const snapshot = { ...order };
+  const orders = [order, order, { ...order }];
+  const first = analyzeOrderBatch(orders);
+  const second = analyzeOrderBatch(orders);
+  const expectedDetails = {
+    materialId: "M-001",
+    orderQuantity: 10,
+    customerId: "C-001",
+    estimatedAmount: 1250000,
+    dueDate: "2026-10-15",
+    orderComment: "오전 입고 요청",
+  };
+  const copies = [...first.results, ...second.results].map(({ orderDetails }) => orderDetails);
+  copies.forEach((details, index) => {
+    for (const input of orders) assert.notStrictEqual(details, input);
+    for (const other of copies.slice(index + 1)) assert.notStrictEqual(details, other);
+  });
+  Object.assign(first.results[0]!.orderDetails, {
+    materialId: "CHANGED",
+    orderQuantity: 99,
+    customerId: "CHANGED",
+    estimatedAmount: 1,
+    dueDate: "2027-01-01",
+    orderComment: "수정",
+  });
+  assert.deepEqual(order, snapshot);
+  assert.deepEqual(orders[2], snapshot);
+  for (const details of copies.slice(1)) assert.deepEqual(details, expectedDetails);
+  assert.deepEqual(analyzeOrderBatch(orders), second);
+
+  Object.assign(order, {
+    materialId: "INPUT-CHANGED",
+    orderQuantity: 3,
+    customerId: "INPUT-CHANGED",
+    estimatedAmount: 2,
+    dueDate: "2027-02-01",
+    orderComment: "입력 수정",
+  });
+  for (const details of copies.slice(1)) assert.deepEqual(details, expectedDetails);
 });

@@ -29,8 +29,11 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
       "availableQuantity",
       "customerBlocked",
       "customerId",
+      "dueDate",
+      "estimatedAmount",
       "materialBlocked",
       "materialId",
+      "orderComment",
       "orderId",
       "orderQuantity",
     ],
@@ -43,10 +46,55 @@ test("App Runtime Evidence는 실제 app 실행 결과를 deterministic하게 �
     availableQuantity: 20,
     customerBlocked: false,
     materialBlocked: false,
+    estimatedAmount: 1250000,
+    dueDate: "2026-10-15",
+    orderComment: "오전 입고 요청",
   });
+  assert.deepEqual(mixed.output.results[0]!.orderDetails, {
+    materialId: "M-001",
+    orderQuantity: 10,
+    customerId: "C-001",
+    estimatedAmount: 1250000,
+    dueDate: "2026-10-15",
+    orderComment: "오전 입고 요청",
+  });
+  for (const scenario of first.scenarios) {
+    assert.equal(scenario.output.results.length, scenario.input.orders.length);
+    scenario.input.orders.forEach((order, index) => {
+      const result = scenario.output.results[index]!;
+      assert.equal(result.orderId, order.orderId);
+      assert.deepEqual(result.orderDetails, {
+        materialId: order.materialId,
+        orderQuantity: order.orderQuantity,
+        customerId: order.customerId,
+        estimatedAmount: order.estimatedAmount,
+        dueDate: order.dueDate,
+        orderComment: order.orderComment,
+      });
+      assert.notStrictEqual(result.orderDetails, order);
+    });
+  }
 
   const duplicate = first.scenarios.find(({ id }) => id === "duplicate-exception-id")!;
   assert.deepEqual(duplicate.output.summary.exceptionOrderIds, ["SO-DUP", "SO-DUP"]);
+  assert.deepEqual(duplicate.output.results.map(({ orderDetails }) => orderDetails), [
+    {
+      materialId: "M-001",
+      orderQuantity: 10,
+      customerId: "C-001",
+      estimatedAmount: 1250000,
+      dueDate: "2026-10-15",
+      orderComment: "오전 입고 요청",
+    },
+    {
+      materialId: "M-002",
+      orderQuantity: 5,
+      customerId: "C-002",
+      estimatedAmount: 625000,
+      dueDate: "2026-10-16",
+      orderComment: "오후 입고 요청",
+    },
+  ]);
   assert.ok(Buffer.byteLength(JSON.stringify(first), "utf8") <= 8_192);
 });
 
