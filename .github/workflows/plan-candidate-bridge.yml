@@ -18,6 +18,10 @@ on:
         description: exact bounded Worker candidate artifact name
         required: true
         type: string
+      source_worker_base_sha:
+        description: recovery Worker의 approved exact base SHA
+        required: false
+        type: string
 
 permissions: {}
 
@@ -46,6 +50,7 @@ jobs:
           RECOVERY_SOURCE_RUN_ID: ${{ inputs.source_worker_run_id }}
           RECOVERY_SOURCE_RUN_ATTEMPT: ${{ inputs.source_worker_run_attempt }}
           RECOVERY_SOURCE_ARTIFACT: ${{ inputs.source_candidate_artifact_name }}
+          RECOVERY_SOURCE_BASE_SHA: ${{ inputs.source_worker_base_sha }}
         with:
           script: |
             const recovery = context.eventName === 'workflow_dispatch';
@@ -71,7 +76,7 @@ jobs:
               if (
                 run.name !== 'PLAN Bounded IMPLEMENT Worker' ||
                 run.path !== '.github/workflows/plan-implement-worker.yml' ||
-                run.event !== 'workflow_run' ||
+                !['workflow_run', 'workflow_dispatch'].includes(run.event) ||
                 run.status !== 'completed' ||
                 run.conclusion !== 'success' ||
                 run.head_branch !== context.payload.repository.default_branch ||
@@ -126,9 +131,14 @@ jobs:
             core.setOutput('digest', artifact.digest ?? '');
             core.setOutput('run_id', String(run.id));
             core.setOutput('run_attempt', String(run.run_attempt));
+            const requestedBaseSha = recovery ? (process.env.RECOVERY_SOURCE_BASE_SHA || '') : '';
+            if (recovery && run.event === 'workflow_dispatch' && !/^[0-9a-f]{40,64}$/.test(requestedBaseSha)) {
+              core.setFailed('recovery Worker requires explicit approved base SHA');
+              return;
+            }
             core.setOutput('bridge_control_plane_sha', recovery ? context.sha : run.head_sha);
             core.setOutput('recovery', recovery ? 'true' : 'false');
-            core.setOutput('worker_base_sha', run.head_sha);
+            core.setOutput('worker_base_sha', recovery && requestedBaseSha ? requestedBaseSha : run.head_sha);
 
       - name: recovery default 이동 trusted compare guard
         id: recovery_guard
