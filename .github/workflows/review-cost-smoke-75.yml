@@ -1,0 +1,297 @@
+name: Cost Smoke - Issue 75 Semantic REVIEW
+
+on:
+  pull_request:
+    types: [ready_for_review]
+    paths:
+      - ".github/workflows/review-cost-smoke-75.yml"
+      - ".github/smoke/review-cost-smoke-75.ts"
+      - ".github/smoke/issue-75-review-input.json"
+
+permissions: {}
+
+jobs:
+  prepare:
+    name: trusted #75 bounded REVIEW smoke input
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      input_artifact_name: ${{ steps.identity.outputs.artifact_name }}
+
+    steps:
+      - name: trusted smoke control-plane checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted smoke 의존성 설치
+        run: npm ci
+
+      - name: current production Reviewer prompt/schema 생성
+        run: npm exec -- tsx .github/smoke/review-cost-smoke-75.ts
+        env:
+          SMOKE_INPUT_JSON: ${{ github.workspace }}/.github/smoke/issue-75-review-input.json
+          SMOKE_OUTPUT_DIR: ${{ runner.temp }}/smoke-input
+
+      - name: exact #75 verified SHA checkout
+        uses: actions/checkout@v4
+        with:
+          ref: e363a9c1266429e1cf251184170eea159846b4e5
+          path: review-target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: bounded #75 patch 생성
+        shell: bash
+        env:
+          BASE_SHA: 1d35334c41e91ae0229365808f49680fd811de0c
+          VERIFIED_SHA: e363a9c1266429e1cf251184170eea159846b4e5
+          MAX_CHANGED_FILES: "12"
+          MAX_PATCH_BYTES: "65536"
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/smoke-input/review-context"
+          cd review-target
+
+          if [ "$(git rev-parse HEAD)" != "$VERIFIED_SHA" ]; then
+            echo "smoke verified SHA mismatch" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}"; then
+            echo "smoke base SHA unavailable" >&2
+            exit 1
+          fi
+
+          mapfile -d '' -t changed_files < <(
+            git diff --name-only -z --diff-filter=ACDMRT "$BASE_SHA" "$VERIFIED_SHA" --
+          )
+          changed_count="${#changed_files[@]}"
+          if [ "$changed_count" -eq 0 ] || [ "$changed_count" -gt "$MAX_CHANGED_FILES" ]; then
+            echo "smoke changed-file budget exceeded: actual=${changed_count}, max=${MAX_CHANGED_FILES}" >&2
+            exit 1
+          fi
+
+          if git diff --numstat "$BASE_SHA" "$VERIFIED_SHA" -- |
+            awk '$1 == "-" || $2 == "-" { found=1 } END { exit(found ? 0 : 1) }'; then
+            echo "smoke refuses binary diffs before AI invocation" >&2
+            exit 1
+          fi
+
+          printf '%s\n' "${changed_files[@]}" > "${RUNNER_TEMP}/smoke-input/review-context/changed-files.txt"
+          git diff --no-ext-diff --no-color --unified=80 "$BASE_SHA" "$VERIFIED_SHA" -- \
+            > "${RUNNER_TEMP}/smoke-input/review-context/patch.diff"
+
+          patch_bytes="$(wc -c < "${RUNNER_TEMP}/smoke-input/review-context/patch.diff" | tr -d '[:space:]')"
+          if [ "$patch_bytes" -eq 0 ] || [ "$patch_bytes" -gt "$MAX_PATCH_BYTES" ]; then
+            echo "smoke patch budget exceeded: actual=${patch_bytes}, max=${MAX_PATCH_BYTES}" >&2
+            exit 1
+          fi
+
+          echo "bounded smoke context: files=${changed_count}, patch_bytes=${patch_bytes}"
+
+      - name: smoke input 구조 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in             review-prompt.md             review-output.schema.json             identity.json             review-context/changed-files.txt             review-context/patch.diff; do
+            test -s "${RUNNER_TEMP}/smoke-input/${required}"
+          done
+
+      - name: smoke artifact identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "artifact_name=semantic-review-cost-smoke-75-input-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: trusted bounded smoke input 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/smoke-input/
+          if-no-files-found: error
+
+  review_agent:
+    name: isolated #75 Semantic Reviewer cost smoke
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ""
+      GH_TOKEN: ""
+      NODE_AUTH_TOKEN: ""
+      NPM_TOKEN: ""
+
+    steps:
+      - name: bounded smoke input 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.input_artifact_name }}
+          path: ${{ runner.temp }}/smoke-input
+
+      - name: neutral workspace 생성
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-neutral/review-context "${RUNNER_TEMP}/reviewer"
+          cp "${RUNNER_TEMP}/smoke-input/review-context/changed-files.txt" smoke-neutral/review-context/
+          cp "${RUNNER_TEMP}/smoke-input/review-context/patch.diff" smoke-neutral/review-context/
+          find smoke-neutral -type f -maxdepth 2 -print
+
+      - name: Untrusted read-only #75 Semantic Reviewer cost smoke
+        id: semantic_reviewer
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          working-directory: smoke-neutral
+          codex-home: ${{ runner.temp }}/semantic-review-smoke-codex-home
+          prompt-file: ${{ runner.temp }}/smoke-input/review-prompt.md
+          output-schema-file: ${{ runner.temp }}/smoke-input/review-output.schema.json
+          output-file: ${{ runner.temp }}/reviewer/reviewer.json
+          effort: medium
+          codex-args: '["--json","-c","project_doc_max_bytes=0"]'
+
+      - name: Reviewer output 최소 검증
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${RUNNER_TEMP}/reviewer/reviewer.json"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "${RUNNER_TEMP}/reviewer/reviewer.json"
+
+      - name: smoke Reviewer output 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-review-cost-smoke-75-output-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reviewer/reviewer.json
+          if-no-files-found: error
+
+  usage:
+    name: trusted #75 Semantic REVIEW cost usage
+    needs: [prepare, review_agent]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.review_agent.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: trusted usage parser checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: exact smoke Reviewer job 선택
+        id: reviewer_job
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runId = Number(process.env.GITHUB_RUN_ID);
+            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            const { data } = await github.request(
+              'GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs',
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                attempt_number: runAttempt,
+                per_page: 100,
+              },
+            );
+            const matches = data.jobs.filter(
+              (job) =>
+                job.name === 'isolated #75 Semantic Reviewer cost smoke' ||
+                job.name.endsWith(' / isolated #75 Semantic Reviewer cost smoke'),
+            );
+            if (matches.length !== 1) {
+              core.setFailed(`expected one exact smoke Reviewer job, found ${matches.length}`);
+              return;
+            }
+            const job = matches[0];
+            if (job.status !== 'completed' || job.conclusion !== 'success') {
+              core.setFailed(
+                `smoke Reviewer job must be completed-success: status=${job.status}, conclusion=${job.conclusion}`,
+              );
+              return;
+            }
+            core.setOutput('job_id', String(job.id));
+
+      - name: completed smoke Reviewer job log 다운로드
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWER_JOB_ID: ${{ steps.reviewer_job.outputs.job_id }}
+          LOG_PATH: ${{ runner.temp }}/semantic-review-smoke-job.log
+        run: |
+          set -euo pipefail
+          tmp="${LOG_PATH}.tmp"
+          rm -f "$tmp" "$LOG_PATH"
+          for attempt in 1 2 3 4 5 6; do
+            echo "smoke Reviewer log download attempt ${attempt}/6"
+            if gh api               -H "Accept: application/vnd.github+json"               "/repos/${GITHUB_REPOSITORY}/actions/jobs/${REVIEWER_JOB_ID}/logs"               > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+              mv "$tmp" "$LOG_PATH"
+              break
+            fi
+            rm -f "$tmp"
+            sleep 2
+          done
+          test -s "$LOG_PATH"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: trusted usage parser 의존성 설치
+        run: npm ci
+
+      - name: smoke Codex token usage 기록
+        id: usage
+        run: npm exec -- tsx src/self-improvement/ai-usage-handler.ts
+        env:
+          CODEX_JOB_LOG: ${{ runner.temp }}/semantic-review-smoke-job.log
+          AI_USAGE_STAGE: semantic-review-smoke-75
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_ID: ${{ steps.reviewer_job.outputs.job_id }}
+          AI_USAGE_JSON: ${{ runner.temp }}/semantic-review-smoke-usage.json
+
+      - name: usage summary
+        shell: bash
+        env:
+          INPUT_TOKENS: ${{ steps.usage.outputs.input_tokens }}
+          CACHED_INPUT_TOKENS: ${{ steps.usage.outputs.cached_input_tokens }}
+          OUTPUT_TOKENS: ${{ steps.usage.outputs.output_tokens }}
+          REASONING_OUTPUT_TOKENS: ${{ steps.usage.outputs.reasoning_output_tokens }}
+          TOTAL_TOKENS: ${{ steps.usage.outputs.total_tokens }}
+        run: |
+          {
+            echo "## Issue #75 Semantic REVIEW Cost Smoke"
+            echo
+            echo "- input_tokens: ${INPUT_TOKENS}"
+            echo "- cached_input_tokens: ${CACHED_INPUT_TOKENS}"
+            echo "- output_tokens: ${OUTPUT_TOKENS}"
+            echo "- reasoning_output_tokens: ${REASONING_OUTPUT_TOKENS}"
+            echo "- total_tokens: ${TOTAL_TOKENS}"
+            echo "- previous total: 30,201"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: trusted smoke usage artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/semantic-review-smoke-usage.json
+          if-no-files-found: error
