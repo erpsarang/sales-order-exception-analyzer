@@ -317,6 +317,7 @@ jobs:
           prompt-file: ${{ runner.temp }}/review-input/review-prompt.md
           output-schema-file: ${{ runner.temp }}/review-input/review-output.schema.json
           output-file: ${{ runner.temp }}/reviewer/reviewer.json
+          model: gpt-5.6-terra
           effort: medium
           codex-args: '["--json","-c","project_doc_max_bytes=0"]'
 

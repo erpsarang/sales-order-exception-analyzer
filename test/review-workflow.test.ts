@@ -64,6 +64,7 @@ test("Semantic REVIEW는 AI 호출 전에 bounded patch를 만들고 full checko
   assert.match(agentSection, /review-neutral\/review-context\/patch\.diff/);
   assert.match(agentSection, /rm -rf review-target/);
   assert.match(agentSection, /test ! -e review-target/);
+  assert.match(agentSection, /model: gpt-5\.6-terra/);
   assert.match(agentSection, /effort: medium/);
   assert.doesNotMatch(agentSection, /effort: high/);
 });
