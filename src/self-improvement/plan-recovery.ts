@@ -1,6 +1,7 @@
 import type { PlanAuthorizeArtifact } from "./plan-authorization.js";
 
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 
 export const PLAN_WORKFLOW_PATH = ".github/workflows/plan.yml" as const;
 
@@ -23,6 +24,12 @@ export interface PlanRunObservation {
 export interface PlanRecoveryDecision {
   readonly required: boolean;
   readonly reason: PlanRecoveryReason;
+}
+
+export function planRecoveryMarker(authorizationDigest: string, currentDefaultSha: string): string {
+  if (!SHA256.test(authorizationDigest)) throw new Error("authorization digest is invalid");
+  validSha("current default SHA", currentDefaultSha);
+  return `<!-- self-improvement:AUTO_REPLAN authorization-digest=${authorizationDigest} target-sha=${currentDefaultSha} -->`;
 }
 
 function validSha(name: string, value: string): void {

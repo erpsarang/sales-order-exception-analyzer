@@ -3,6 +3,7 @@ import test from "node:test";
 import { createPlanAuthorizeArtifact } from "../src/self-improvement/plan-authorization.js";
 import {
   classifyPlanRecovery,
+  planRecoveryMarker,
   type PlanRunObservation,
 } from "../src/self-improvement/plan-recovery.js";
 
@@ -97,4 +98,15 @@ test("workflow identity 이상은 자동 recovery하지 않고 fail-closed 한�
     () => classifyPlanRecovery(approved, planRun({ headBranch: "feature" }), "main", targetSha),
     /identity is invalid/,
   );
+});
+
+
+test("recovery marker는 authorization과 current default SHA에 결합된다", () => {
+  const digest = "1".repeat(64);
+  const first = planRecoveryMarker(digest, "2".repeat(40));
+  const second = planRecoveryMarker(digest, "3".repeat(40));
+  assert.notEqual(first, second);
+  assert.match(first, /authorization-digest=1{64}/);
+  assert.match(first, /target-sha=2{40}/);
+  assert.throws(() => planRecoveryMarker("bad", "2".repeat(40)), /authorization digest/);
 });
