@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -110,6 +111,22 @@ function selectedSourceArtifact(): HandoffArtifactMetadata {
   };
 }
 
+async function validateLiveRequirement(bundle: PlanImplementWorkerBundle): Promise<void> {
+  const { owner, repo } = repositoryParts();
+  const issueNumber = bundle.authorization.requirement.issueNumber;
+  const issue = await api<any>(`/repos/${owner}/${repo}/issues/${issueNumber}`);
+  if (issue.pull_request || issue.state !== "open" || typeof issue.title !== "string") {
+    throw new Error("approved requirement issue is not an open issue");
+  }
+  const body = issue.body == null ? null : String(issue.body);
+  const digest = createHash("sha256")
+    .update(JSON.stringify([issue.title, body]), "utf8")
+    .digest("hex");
+  if (digest !== bundle.authorization.requirement.digest) {
+    throw new Error("requirement title/body changed after PLAN approval; re-plan required");
+  }
+}
+
 async function validateLiveSource(
   bundle: PlanImplementWorkerBundle,
   selectedArtifact: HandoffArtifactMetadata,
@@ -165,6 +182,7 @@ async function prepare(): Promise<void> {
   const workerInput = required("WORKER_INPUT_DIRECTORY");
   const bundle = loadBundle(sourceDirectory);
   const sourceArtifact = selectedSourceArtifact();
+  await validateLiveRequirement(bundle);
   const source = await validateLiveSource(bundle, sourceArtifact);
 
   const workerRunId = positiveInteger("WORKER_RUN_ID");
@@ -188,6 +206,7 @@ async function validate(): Promise<void> {
   const outputDirectory = required("CANDIDATE_OUTPUT_DIRECTORY");
   const bundle = loadBundle(sourceDirectory);
   const sourceArtifact = selectedSourceArtifact();
+  await validateLiveRequirement(bundle);
   const source = await validateLiveSource(bundle, sourceArtifact);
   const workerRunId = positiveInteger("WORKER_RUN_ID");
   const workerRunAttempt = positiveInteger("WORKER_RUN_ATTEMPT");
