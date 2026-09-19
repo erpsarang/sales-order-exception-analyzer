@@ -549,9 +549,11 @@ jobs:
             echo "attempt 0 result is missing deterministic CI status" >&2
             exit 1
           fi
-          echo "ci_status=$STATUS" >> "$GITHUB_OUTPUT"
-          echo "repair_ready=$REPAIR_READY" >> "$GITHUB_OUTPUT"
-          echo "repair_blocked_reason=$REPAIR_REASON" >> "$GITHUB_OUTPUT"
+          {
+            echo "ci_status=$STATUS"
+            echo "repair_ready=$REPAIR_READY"
+            echo "repair_blocked_reason=$REPAIR_REASON"
+          } >> "$GITHUB_OUTPUT"
 
 
   repair1:
