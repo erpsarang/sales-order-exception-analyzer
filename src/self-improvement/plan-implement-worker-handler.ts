@@ -199,10 +199,12 @@ async function validate(): Promise<void> {
 
   const proposal = JSON.parse(readFileSync(rawProposalPath, "utf8")) as WorkerProposal;
   const candidate = createCandidateChangeSet(bundle.contract, bundle.context, proposal);
+  const recoveryGuard = selectedRecoveryGuard();
   const provenance = createWorkerCandidateProvenance({
     bundle,
     source,
     sourceArtifact,
+    ...(recoveryGuard ? { recoveryGuard } : {}),
     workerRunId,
     workerRunAttempt,
     candidate,
