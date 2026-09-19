@@ -64,6 +64,7 @@ test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () 
 test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Worker에 자동 재진입한다", () => {
   assert.match(workflow, /Trusted PLAN IMPLEMENT Handoff.*,.*Trusted Worker Recovery Preflight/);
   assert.match(workflow, /name: RECOVERY_READY artifact 다운로드/);
+  assert.match(workflow, /name: RECOVERY_READY artifact 다운로드[\s\S]*run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
   assert.match(workflow, /kind === 'trusted-worker-recovery-ready'/);
   assert.match(workflow, /preflight\?\.workflowPath === '\.github\/workflows\/plan-worker-recovery-preflight\.yml'/);
   assert.match(workflow, /recovery\.preflight\?\.runId === run\.id/);
