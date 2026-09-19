@@ -37,6 +37,8 @@ test("Recovery Preflight는 #75 approved base 이후 명시된 Framework recover
   assert.match(workflow, /'test\/plan-implement-worker-workflow\.test\.ts'/);
   assert.match(workflow, /'\.github\/workflows\/plan-worker-recovery-preflight\.yml'/);
   assert.match(workflow, /'src\/self-improvement\/plan-implement-worker-handler\.ts'/);
+  assert.match(workflow, /'src\/self-improvement\/plan-implement-worker\.ts'/);
+  assert.match(workflow, /'test\/plan-implement-worker\.test\.ts'/);
   assert.match(workflow, /'test\/plan-worker-recovery-preflight-workflow\.test\.ts'/);
   assert.match(workflow, /!\['added', 'modified'\]\.includes\(file\.status\)/);
   assert.match(workflow, /recovery requires fresh PLAN; non-approved drift/);
