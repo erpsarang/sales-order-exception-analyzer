@@ -29,13 +29,18 @@ test("Human Merge PR은 MERGE_READY exact SHA와 Trusted Rail provenance를 함�
   assert.match(orchestrator, /orchestration-provenance-issue-/);
 });
 
-test("Business Feedback은 열린 [사용자 피드백] Issue가 정확히 하나일 때만 자동 선택한다", () => {
+test("Business Feedback 0건은 runtime-only LEARN, 1건은 포함, 2건 이상은 fail-closed한다", () => {
   assert.match(bootstrap, /state: 'open'/);
   assert.match(bootstrap, /issue\.title\.startsWith\('\[사용자 피드백\]'\)/);
   assert.match(bootstrap, /businessFeedback\.length === 0/);
-  assert.match(bootstrap, /should_run', 'false'/);
-  assert.match(bootstrap, /businessFeedback\.length !== 1/);
+  assert.match(bootstrap, /App Runtime Evidence만으로 기술\/품질 LEARN/);
+  assert.match(bootstrap, /businessFeedback\.length > 1/);
   assert.match(bootstrap, /core\.setFailed/);
+  assert.match(
+    bootstrap,
+    /businessFeedback\.length === 1 \? String\(businessFeedback\[0\]\.number\) : ''/,
+  );
+  assert.doesNotMatch(bootstrap, /Issue가 없어 이번 cycle은 no-op/);
 });
 
 test("bootstrap은 LEARN Source만 dispatch하며 구현/merge를 시작하지 않는다", () => {
