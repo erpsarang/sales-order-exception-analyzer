@@ -5,9 +5,11 @@ import {
   PLAN_IMPLEMENT_CODEX_ACTION_PIN,
   PLAN_IMPLEMENT_CODEX_ARGS,
   PLAN_IMPLEMENT_CODEX_EFFORT,
+  PLAN_IMPLEMENT_CODEX_MODEL,
 } from "../src/self-improvement/plan-implement-worker.js";
 
 const workflow = readFileSync(".github/workflows/plan-implement-worker.yml", "utf8");
+const workerPolicySource = readFileSync("src/self-improvement/plan-implement-worker.ts", "utf8");
 
 test("PLAN Worker는 fresh Job 기반 pre-Bridge bounded repair를 포함한다", () => {
   assert.match(workflow, /\n  attempt0:\n/);
@@ -81,6 +83,15 @@ test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Wor
   assert.match(workflow, /run-id: \$\{\{ needs\.attempt0_result\.outputs\.source_run_id \}\}/);
 });
 
+
+test("bounded IMPLEMENT 계열은 Terra + low로 고정하고 AI_CALL_ID에 model identity를 포함한다", () => {
+  assert.equal((workflow.match(/model: gpt-5\.6-terra/g) ?? []).length, 4);
+  assert.equal((workflow.match(/effort: low/g) ?? []).length, 4);
+  assert.ok(workflow.includes(`model: ${PLAN_IMPLEMENT_CODEX_MODEL}`));
+  assert.ok(workflow.includes(`effort: ${PLAN_IMPLEMENT_CODEX_EFFORT}`));
+  assert.match(workerPolicySource, /model: PLAN_IMPLEMENT_CODEX_MODEL/);
+  assert.doesNotMatch(workflow, /model: gpt-6-astra/);
+});
 
 test("동일 direct PASS bounded IMPLEMENT는 ledger로 Codex 재호출을 차단한다", () => {
   assert.ok(workflow.includes(`uses: openai/codex-action@${PLAN_IMPLEMENT_CODEX_ACTION_PIN}`));

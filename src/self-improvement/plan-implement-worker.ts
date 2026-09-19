@@ -32,6 +32,7 @@ const GIT_SHA = /^[0-9a-f]{40,64}$/;
 
 export const PLAN_IMPLEMENT_AI_CALL_STAGE = "plan-bounded-implement-attempt0-v1" as const;
 export const PLAN_IMPLEMENT_CODEX_ACTION_PIN = "52fe01ec70a42f454c9d2ebd47598f9fd6893d56" as const;
+export const PLAN_IMPLEMENT_CODEX_MODEL = "gpt-5.6-terra" as const;
 export const PLAN_IMPLEMENT_CODEX_EFFORT = "low" as const;
 export const PLAN_IMPLEMENT_CODEX_ARGS = '["-c","project_doc_max_bytes=0"]' as const;
 
@@ -254,6 +255,7 @@ export function planImplementAiCallId(input: {
     promptDigest,
     schemaDigest,
     actionPin: PLAN_IMPLEMENT_CODEX_ACTION_PIN,
+    model: PLAN_IMPLEMENT_CODEX_MODEL,
     effort: PLAN_IMPLEMENT_CODEX_EFFORT,
     codexArgs: PLAN_IMPLEMENT_CODEX_ARGS,
   };
