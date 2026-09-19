@@ -1,6 +1,8 @@
 name: Read-only AI PLAN
 
 on:
+  issues:
+    types: [opened, reopened]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -12,7 +14,11 @@ permissions: {}
 
 jobs:
   plan:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'issues' &&
+       startsWith(github.event.issue.title, '[업무 요구]'))
     outputs:
       identity: ${{ steps.input.outputs.identity }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -46,7 +52,7 @@ jobs:
         id: input
         uses: actions/github-script@v7
         env:
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ISSUE_NUMBER: ${{ github.event_name == 'issues' && github.event.issue.number || inputs.issue_number }}
         with:
           script: |
             const fs = require('node:fs');
