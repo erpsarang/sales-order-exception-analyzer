@@ -325,7 +325,7 @@ jobs:
       - name: exact trusted usage control-plane checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.trusted_code_sha }}
+          ref: ${{ needs.prepare.outputs.source_control_plane_sha }}
           path: usage-control
           token: ${{ github.token }}
           persist-credentials: false
