@@ -3,7 +3,7 @@ name: Semantic REVIEW
 on:
   workflow_call:
     secrets:
-      CODEX_API_KEY:
+      APP_CODEX_API_KEY:
         required: true
     outputs:
       decision:
@@ -258,7 +258,7 @@ jobs:
         id: semantic_reviewer
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.CODEX_API_KEY }}
+          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
           permission-profile: ":read-only"
           allow-bot-users: "github-actions[bot]"
           safety-strategy: drop-sudo

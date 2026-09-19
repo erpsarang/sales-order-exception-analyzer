@@ -230,7 +230,7 @@ jobs:
         id: codex
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.CODEX_API_KEY }}
+          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
           permission-profile: ":workspace"
           prompt-file: fix-prompt.txt
           allow-bot-users: "github-actions[bot]"
