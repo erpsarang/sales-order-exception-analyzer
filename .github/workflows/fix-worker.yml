@@ -216,6 +216,15 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Worker dependency 사전 준비
+        run: npm ci --ignore-scripts
+
       - name: trusted FIX prompt 다운로드
         uses: actions/download-artifact@v4
         with:
@@ -256,10 +265,82 @@ jobs:
           path: ${{ runner.temp }}/fix-workspace.tar.gz
           if-no-files-found: error
 
-  record:
-    name: clean FIX provenance 기록
+  validate:
+    name: trusted FIX candidate deterministic validation
     needs: [prepare, worker]
     if: needs.prepare.result == 'success' && needs.worker.result == 'success'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ""
+      GH_TOKEN: ""
+      NODE_AUTH_TOKEN: ""
+      NPM_TOKEN: ""
+
+    steps:
+      - name: exact reviewed SHA clean checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.reviewed_head_sha }}
+          path: validated-target
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: exact validation base SHA 확인
+        shell: bash
+        working-directory: validated-target
+        env:
+          EXPECTED_SHA: ${{ needs.prepare.outputs.reviewed_head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: untrusted FIX workspace snapshot 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: fix-workspace-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-archive
+
+      - name: candidate workspace 복원 및 exact base에 overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/candidate-workspace"
+          tar -xzf "${RUNNER_TEMP}/candidate-archive/fix-workspace.tar.gz"             -C "${RUNNER_TEMP}/candidate-workspace"
+          rsync -a --delete             --exclude='.git'             --exclude='node_modules/'             "${RUNNER_TEMP}/candidate-workspace/"             "${GITHUB_WORKSPACE}/validated-target/"
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: validated-target/package-lock.json
+
+      - name: trusted validation dependencies 설치
+        working-directory: validated-target
+        run: npm ci
+
+      - name: FIX candidate 테스트
+        working-directory: validated-target
+        run: npm test
+
+      - name: FIX candidate 빌드
+        working-directory: validated-target
+        run: npm run build
+
+      - name: FIX candidate diff whitespace 검증
+        working-directory: validated-target
+        run: git diff --check
+
+  record:
+    name: clean FIX provenance 기록
+    needs: [prepare, worker, validate]
+    if: >-
+      needs.prepare.result == 'success' &&
+      needs.worker.result == 'success' &&
+      needs.validate.result == 'success'
     permissions:
       contents: read
       actions: read

@@ -5,11 +5,13 @@ import test from "node:test";
 const requestWorkflow = await readFile(".github/workflows/fix-request.yml", "utf8");
 const workerWorkflow = await readFile(".github/workflows/fix-worker.yml", "utf8");
 const trustedRail = await readFile(".github/workflows/trusted-rail.yml", "utf8");
+const fixHandler = await readFile("src/self-improvement/fix-handler.ts", "utf8");
 
 const requestJob = requestWorkflow.split("\n  dispatch_worker:\n")[0] ?? "";
 const requestDispatch = requestWorkflow.split("\n  dispatch_worker:\n")[1] ?? "";
 const workerPrepare = (workerWorkflow.split("\n  prepare:\n")[1] ?? "").split("\n  worker:\n")[0] ?? "";
-const workerJob = (workerWorkflow.split("\n  worker:\n")[1] ?? "").split("\n  record:\n")[0] ?? "";
+const workerJob = (workerWorkflow.split("\n  worker:\n")[1] ?? "").split("\n  validate:\n")[0] ?? "";
+const workerValidation = (workerWorkflow.split("\n  validate:\n")[1] ?? "").split("\n  record:\n")[0] ?? "";
 const workerRecord = (workerWorkflow.split("\n  record:\n")[1] ?? "").split("\n  dispatch_trusted_rail:\n")[0] ?? "";
 const railDispatch = workerWorkflow.split("\n  dispatch_trusted_rail:\n")[1] ?? "";
 const railSeal = trustedRail.split("\n  publish:\n")[0] ?? "";
@@ -92,6 +94,25 @@ test("untrusted FIX Worker에는 write credential과 push/Merge 경로가 없다
 test("untrusted FIX Codex는 github-actions[bot]만 exact allowlist하고 전체 bot 허용은 금지한다", () => {
   assert.match(workerJob, /allow-bot-users: "github-actions\[bot\]"/);
   assert.doesNotMatch(workerJob, /allow-bots:\s*true/);
+});
+
+test("FIX Worker는 Codex 전에 dependency를 준비하고 로컬 test/build를 명시한다", () => {
+  assert.match(workerJob, /npm ci --ignore-scripts/);
+  assert.match(fixHandler, /패키지 재설치를 시도하지 마세요/);
+  assert.match(fixHandler, /npm test와 npm run build를 실행/);
+});
+
+test("FIX candidate는 fresh trusted runner의 deterministic validation을 통과해야 한다", () => {
+  assert.match(workerValidation, /permissions:\n      contents: read\n      actions: read/);
+  assert.match(workerValidation, /ref: \$\{\{ needs\.prepare\.outputs\.reviewed_head_sha \}\}/);
+  assert.match(workerValidation, /fix-workspace-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/);
+  assert.match(workerValidation, /npm ci/);
+  assert.match(workerValidation, /npm test/);
+  assert.match(workerValidation, /npm run build/);
+  assert.match(workerValidation, /git diff --check/);
+  assert.doesNotMatch(workerValidation, /openai\/codex-action|contents: write|actions: write/);
+  assert.match(workerRecord, /needs: \[prepare, worker, validate\]/);
+  assert.match(workerRecord, /needs\.validate\.result == 'success'/);
 });
 
 test("FIX candidate provenance 기록은 fresh trusted runner의 read-only job에서 수행한다", () => {
