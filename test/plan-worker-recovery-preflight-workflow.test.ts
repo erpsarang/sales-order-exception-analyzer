@@ -40,12 +40,17 @@ test("Recovery Preflight는 STALLED_WORKER와 failed Worker/Handoff exact identi
 test("Recovery Preflight는 #75 approved base 이후 명시된 Framework recovery 파일 drift만 허용한다", () => {
   assert.match(workflow, /compareCommitsWithBasehead/);
   assert.match(workflow, /comparison\.merge_base_commit\.sha !== source\.baseSha/);
-  assert.match(workflow, /files\.length > 10/);
+  assert.match(workflow, /files\.length > 12/);
   assert.match(workflow, /'\.github\/workflows\/plan-implement-worker\.yml'/);
+  assert.match(workflow, /'\.github\/workflows\/plan-candidate-bridge\.yml'/);
   assert.match(workflow, /'test\/plan-implement-worker-workflow\.test\.ts'/);
+  assert.match(workflow, /'test\/plan-candidate-bridge-workflow\.test\.ts'/);
+  assert.match(workflow, /'test\/plan-candidate-bridge\.test\.ts'/);
   assert.match(workflow, /'\.github\/workflows\/plan-worker-recovery-preflight\.yml'/);
   assert.match(workflow, /'src\/self-improvement\/plan-implement-worker-handler\.ts'/);
   assert.match(workflow, /'src\/self-improvement\/plan-implement-worker\.ts'/);
+  assert.match(workflow, /'src\/self-improvement\/plan-candidate-bridge-handler\.ts'/);
+  assert.match(workflow, /'src\/self-improvement\/plan-candidate-bridge\.ts'/);
   assert.match(workflow, /'test\/plan-implement-worker\.test\.ts'/);
   assert.match(workflow, /'test\/plan-worker-recovery-preflight-workflow\.test\.ts'/);
   assert.match(workflow, /!\['added', 'modified'\]\.includes\(file\.status\)/);
