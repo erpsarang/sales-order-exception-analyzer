@@ -16,7 +16,7 @@ test("PLAN Worker는 fresh Job 기반 pre-Bridge bounded repair를 포함한다"
   assert.match(workflow, /Untrusted bounded IMPLEMENT repair 2/);
   assert.match(workflow, /bounded repair 소진 시 fail-closed/);
   assert.match(workflow, /repair_ready: \${\{ steps\.ci0\.outputs\.repair_ready \}\}/);
-  assert.match(workflow, /needs\.attempt0\.outputs\.repair_ready == 'true'/);
+  assert.match(workflow, /needs\.attempt0_result\.outputs\.repair_ready == 'true'/);
   assert.match(workflow, /needs\.repair1\.outputs\.repair_ready == 'true'/);
   assert.match(workflow, /out-of-scope boundary repair 차단 시 fail-closed/);
   assert.match(workflow, /AI repair blocked by deterministic repair policy/);
