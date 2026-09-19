@@ -203,6 +203,7 @@ async function validate(): Promise<void> {
     bundle,
     source,
     sourceArtifact,
+    recoveryGuard: selectedRecoveryGuard(),
     workerRunId,
     workerRunAttempt,
     candidate,
