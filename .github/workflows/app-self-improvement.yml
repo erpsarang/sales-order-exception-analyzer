@@ -254,9 +254,19 @@ jobs:
                   core.setFailed('stalled marker issue identity mismatch');
                   return;
                 }
+                const resumePrefix =
+                  `<!-- ai-dev-framework:RESUME_DISPATCH stalled-worker-run=${stalled.workerRunId} `;
+                if (comments.some((item) => (item.body || '').includes(resumePrefix))) continue;
+                const handoffResumeCount = comments.filter((item) =>
+                  (item.body || '').includes('<!-- ai-dev-framework:RESUME_DISPATCH ') &&
+                  (item.body || '').includes(`handoff-run=${stalled.handoffRunId} `),
+                ).length;
+                if (handoffResumeCount >= 2) {
+                  core.setFailed(`automatic Worker Resume budget exhausted for Handoff ${stalled.handoffRunId}`);
+                  return;
+                }
                 const resumeMarker =
-                  `<!-- ai-dev-framework:RESUME_DISPATCH stalled-worker-run=${stalled.workerRunId} target-sha=${currentDefaultSha} -->`;
-                if (comments.some((item) => (item.body || '').includes(resumeMarker))) continue;
+                  `<!-- ai-dev-framework:RESUME_DISPATCH stalled-worker-run=${stalled.workerRunId} handoff-run=${stalled.handoffRunId} target-sha=${currentDefaultSha} -->`;
                 pending.push({ ...stalled, resumeMarker });
               }
             }
@@ -270,6 +280,24 @@ jobs:
               return;
             }
             const stalled = pending[0];
+
+            const { data: failedWorker } = await github.rest.actions.getWorkflowRun({
+              ...context.repo,
+              run_id: stalled.workerRunId,
+            });
+            if (
+              failedWorker.name !== 'PLAN Bounded IMPLEMENT Worker' ||
+              failedWorker.path !== '.github/workflows/plan-implement-worker.yml' ||
+              !['workflow_run', 'workflow_dispatch'].includes(failedWorker.event) ||
+              failedWorker.status !== 'completed' ||
+              failedWorker.conclusion !== 'failure' ||
+              failedWorker.head_branch !== defaultBranch ||
+              failedWorker.run_attempt !== stalled.workerRunAttempt ||
+              (failedWorker.event === 'workflow_run' && failedWorker.head_sha !== stalled.baseSha)
+            ) {
+              core.setFailed('stalled Worker source identity mismatch');
+              return;
+            }
 
             const { data: handoffRun } = await github.rest.actions.getWorkflowRun({
               ...context.repo,
