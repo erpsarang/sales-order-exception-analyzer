@@ -42,7 +42,7 @@ jobs:
           path: ${{ runner.temp }}/worker-recovery-source
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ steps.source.outputs.run_id }}
+          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Trusted handoff artifact exact 선택
         id: source
