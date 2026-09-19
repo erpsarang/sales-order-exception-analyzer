@@ -50,6 +50,20 @@ test("AI reviewer는 exact verified SHA를 credential-free checkout하고 neutra
   assert.match(agentSection, /project_doc_max_bytes=0/);
 });
 
+test("Semantic REVIEW는 AI 호출 전에 bounded patch를 만들고 full checkout을 폐기한다", () => {
+  assert.match(prepareSection, /base_sha: \${\{ steps\.review_source\.outputs\.base_sha \}\}/);
+  assert.match(agentSection, /fetch-depth: 0/);
+  assert.match(agentSection, /MAX_CHANGED_FILES: "12"/);
+  assert.match(agentSection, /MAX_PATCH_BYTES: "65536"/);
+  assert.match(agentSection, /git diff --name-only -z --diff-filter=ACDMRT/);
+  assert.match(agentSection, /refuses binary diffs before AI invocation/);
+  assert.match(agentSection, /review-neutral\/review-context\/patch\.diff/);
+  assert.match(agentSection, /rm -rf review-target/);
+  assert.match(agentSection, /test ! -e review-target/);
+  assert.match(agentSection, /effort: medium/);
+  assert.doesNotMatch(agentSection, /effort: high/);
+});
+
 test("reviewer는 target project code를 실행하지 않고 structured output schema를 사용한다", () => {
   assert.doesNotMatch(agentSection, /working-directory: review-target\n\s+run: npm (?:ci|test|run)/);
   assert.match(agentSection, /output-schema-file:/);
