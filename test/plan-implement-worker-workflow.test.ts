@@ -178,6 +178,27 @@ test("bounded IMPLEMENT repair2 usage는 raw proposal 보존 뒤 trusted same-jo
   assert.doesNotMatch(inputCleanup, /worker-codex-home-repair-2/);
 });
 
+test("finalize는 bounded IMPLEMENT recorded usage만 trusted summary로 합산한다", () => {
+  const finalize = workflow.slice(workflow.indexOf("\n  finalize:\n"));
+
+  assert.match(finalize, /\n      contents: read\n/);
+  assert.match(finalize, /name: bounded IMPLEMENT recorded usage summary 입력 준비/);
+  assert.match(
+    finalize,
+    /pattern: ai-usage-bounded-implement-\*-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(finalize, /merge-multiple: true/);
+  assert.match(finalize, /name: Trusted recorded usage summary checkout/);
+  assert.match(finalize, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+  assert.match(finalize, /working-directory: control-usage-summary[\s\S]*ai-usage-summary-handler\.ts/);
+  assert.match(finalize, /AI_USAGE_SUMMARY_DIRECTORY: \$\{\{ runner\.temp \}\}\/bounded-implement-usage-records/);
+  assert.match(finalize, /AI_USAGE_RUN_ID: \$\{\{ github\.run_id \}\}/);
+  assert.match(finalize, /AI_USAGE_RUN_ATTEMPT: \$\{\{ github\.run_attempt \}\}/);
+  assert.match(finalize, /trusted bounded IMPLEMENT recorded usage summary artifact 저장/);
+  assert.match(finalize, /steps\.usage_summary\.outputs\.artifact_name/);
+  assert.doesNotMatch(finalize, /AI_USAGE_BUDGET|TOKEN_BUDGET|MAX_TOTAL_TOKENS/);
+});
+
 test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () => {
   assert.match(workflow, /source_run_id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
   assert.match(workflow, /source_run_attempt: \$\{\{ steps\.source\.outputs\.run_attempt \}\}/);
