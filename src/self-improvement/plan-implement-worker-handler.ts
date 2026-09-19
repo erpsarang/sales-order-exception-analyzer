@@ -11,6 +11,7 @@ import {
   workerCandidateArtifactName,
   type HandoffArtifactMetadata,
   type PlanImplementWorkerBundle,
+  type PlanImplementWorkerRecoveryGuard,
   type PlanImplementWorkerSourceRun,
 } from "./plan-implement-worker.js";
 
@@ -90,6 +91,17 @@ function loadBundle(directory: string): PlanImplementWorkerBundle {
   });
 }
 
+function trustedRecoveryGuard(): PlanImplementWorkerRecoveryGuard | undefined {
+  const kind = process.env.TRUSTED_RECOVERY_GUARD_KIND;
+  if (!kind) return undefined;
+  if (kind !== "trusted-recovery-compare-v1") throw new Error("invalid trusted recovery guard kind");
+  return {
+    kind,
+    baseSha: required("TRUSTED_RECOVERY_BASE_SHA"),
+    currentDefaultSha: required("TRUSTED_RECOVERY_DEFAULT_SHA"),
+  };
+}
+
 function selectedSourceArtifact(): HandoffArtifactMetadata {
   return {
     name: required("SOURCE_ARTIFACT_NAME"),
@@ -144,7 +156,7 @@ async function validateLiveSource(
     throw new Error("source handoff artifact identity mismatch");
   }
 
-  validatePlanImplementWorkerSource(bundle, source, selectedArtifact);
+  validatePlanImplementWorkerSource(bundle, source, selectedArtifact, trustedRecoveryGuard());
   return source;
 }
 
@@ -189,6 +201,7 @@ async function validate(): Promise<void> {
     workerRunId,
     workerRunAttempt,
     candidate,
+    ...(trustedRecoveryGuard() ? { recoveryGuard: trustedRecoveryGuard() } : {}),
   });
 
   mkdirSync(outputDirectory, { recursive: true });
