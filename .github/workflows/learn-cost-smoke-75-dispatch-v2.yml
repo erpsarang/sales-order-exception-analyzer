@@ -1,0 +1,60 @@
+name: Cost Smoke - Issue 75 Luna LEARN Dispatch v2
+
+on:
+  pull_request:
+    types: [ready_for_review]
+    paths:
+      - ".github/workflows/learn-cost-smoke-75-dispatch-v2.yml"
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: trusted Issue 75 Luna LEARN smoke dispatch v2
+    if: >-
+      github.event.pull_request.head.ref == 'chatgpt/smoke-115-luna-learn-cost-v2' &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: current default branch exact SHA 확인
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_MAIN_SHA: fe5b93b8ec54e6b2252c70d0ea1c9ae261b9ceac
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get(context.repo);
+            const { data: branch } = await github.rest.repos.getBranch({
+              ...context.repo,
+              branch: repo.default_branch,
+            });
+            if (branch.commit.sha !== process.env.EXPECTED_MAIN_SHA) {
+              core.setFailed(
+                `main SHA changed before cost smoke: expected=${process.env.EXPECTED_MAIN_SHA}, actual=${branch.commit.sha}`,
+              );
+              return;
+            }
+
+      - name: production Trusted LEARN Source 1회 dispatch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'learn-source.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                requirement_issue_number: '75',
+                human_merge_pr_number: '101',
+                trusted_rail_run_id: '35452035743',
+                trusted_rail_run_attempt: '1',
+                orchestration_artifact_name:
+                  'orchestration-provenance-issue-75-35452035743-attempt-1',
+                business_evidence_issue_number: '',
+              },
+            });
+            core.info('Issue #75 production Trusted LEARN Source cost smoke v2를 1회 dispatch했습니다');
