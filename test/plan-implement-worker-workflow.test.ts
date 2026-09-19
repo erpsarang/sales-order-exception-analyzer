@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  PLAN_IMPLEMENT_CODEX_ACTION_PIN,
+  PLAN_IMPLEMENT_CODEX_ARGS,
+  PLAN_IMPLEMENT_CODEX_EFFORT,
+} from "../src/self-improvement/plan-implement-worker.js";
 
 const workflow = readFileSync(".github/workflows/plan-implement-worker.yml", "utf8");
 
@@ -78,6 +83,9 @@ test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Wor
 
 
 test("동일 direct PASS bounded IMPLEMENT는 ledger로 Codex 재호출을 차단한다", () => {
+  assert.ok(workflow.includes(`uses: openai/codex-action@${PLAN_IMPLEMENT_CODEX_ACTION_PIN}`));
+  assert.ok(workflow.includes(`effort: ${PLAN_IMPLEMENT_CODEX_EFFORT}`));
+  assert.ok(workflow.includes(`codex-args: '${PLAN_IMPLEMENT_CODEX_ARGS}'`));
   assert.match(workflow, /ai_call_id: \$\{\{ steps\.prepare\.outputs\.ai_call_id \}\}/);
   assert.match(workflow, /reused: \$\{\{ steps\.prepare\.outputs\.reuse_candidate \}\}/);
   assert.match(workflow, /name: 동일 AI call 성공 candidate 다운로드/);
