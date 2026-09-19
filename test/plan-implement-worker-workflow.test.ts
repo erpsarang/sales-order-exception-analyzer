@@ -45,3 +45,19 @@ test("PLAN Worker는 timeout 경계 failure만 fresh runner에서 1회 bounded �
   assert.equal((attempt0.match(/uses: openai\/codex-action@/g) ?? []).length, 1);
   assert.doesNotMatch(attempt0, /name: Untrusted bounded IMPLEMENT timeout retry/);
 });
+
+
+test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록하고 아직 자동 Resume하지 않는다", () => {
+  assert.match(workflow, /source_run_id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
+  assert.match(workflow, /source_run_attempt: \$\{\{ steps\.source\.outputs\.run_attempt \}\}/);
+  assert.match(workflow, /\n      issues: write\n/);
+  assert.match(workflow, /name: INFRA_FAILURE stalled cycle 기록/);
+  assert.match(workflow, /ai-dev-framework:STALLED_WORKER issue=/);
+  assert.match(workflow, /handoff-run=/);
+  assert.match(workflow, /handoff-attempt=/);
+  assert.match(workflow, /base-sha=/);
+  assert.match(workflow, /reason=INFRA_FAILURE/);
+  assert.match(workflow, /exact STALLED_WORKER marker already exists/);
+  assert.match(workflow, /자동 Resume은 아직 수행하지 않습니다/);
+  assert.doesNotMatch(workflow, /workflow_id: 'plan-implement-worker\.yml'/);
+});
