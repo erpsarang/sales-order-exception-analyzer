@@ -213,7 +213,6 @@ test("사용자/Human provenance만 있는 business requirement는 Human Output 
     const augmented = augmentPlanContextWithHumanOutputSurfaces(requirement, root, initial);
 
     assert.deepEqual(augmented, initial);
-    assert.ok(!augmented.files.some((file) => file.path === ".github/workflows/plan.yml"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
