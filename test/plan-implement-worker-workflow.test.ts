@@ -116,6 +116,37 @@ test("bounded IMPLEMENT attempt0 usage는 raw proposal 보존 뒤 trusted same-j
   assert.doesNotMatch(inputCleanup, /worker-codex-home/);
 });
 
+test("bounded IMPLEMENT repair1 usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
+  const repair1 = workflow.slice(workflow.indexOf("\n  repair1:\n"), workflow.indexOf("\n  repair2:\n"));
+  const rawIndex = repair1.indexOf("repair 1 raw proposal artifact 저장");
+  const checkoutIndex = repair1.indexOf("Trusted validation checkout 1");
+  const usageIndex = repair1.indexOf("CODEX_HOME persisted bounded IMPLEMENT repair1 usage exact 기록");
+  const usageArtifactIndex = repair1.indexOf("trusted bounded IMPLEMENT repair1 usage artifact 저장");
+  const cleanupIndex = repair1.indexOf("repair1 CODEX_HOME 제거");
+  const candidateValidationIndex = repair1.indexOf("Trusted candidate 검증 1");
+
+  assert.ok(rawIndex >= 0);
+  assert.ok(checkoutIndex > rawIndex);
+  assert.ok(usageIndex > checkoutIndex);
+  assert.ok(usageArtifactIndex > usageIndex);
+  assert.ok(cleanupIndex > usageArtifactIndex);
+  assert.ok(candidateValidationIndex > cleanupIndex);
+
+  assert.match(repair1, /bounded-worker-raw-proposal-repair1-/);
+  assert.match(repair1, /working-directory: control-validate-1[\s\S]*ai-usage-rollout-handler\.ts/);
+  assert.match(repair1, /CODEX_HOME_PATH: \$\{\{ runner\.temp \}\}\/worker-codex-home-repair-1/);
+  assert.match(repair1, /AI_USAGE_STAGE: bounded-implement-repair1/);
+  assert.match(repair1, /AI_USAGE_JOB_NAME: repair1/);
+  assert.match(repair1, /bounded-implement-usage\/repair1\.json/);
+  assert.doesNotMatch(repair1, /actions\/jobs\/.*\/logs/);
+
+  const inputCleanup = repair1.slice(
+    repair1.indexOf("      - name: repair 1 input 제거"),
+    repair1.indexOf("      - name: Trusted validation checkout 1"),
+  );
+  assert.doesNotMatch(inputCleanup, /worker-codex-home-repair-1/);
+});
+
 test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () => {
   assert.match(workflow, /source_run_id: \$\{\{ steps\.source\.outputs\.run_id \}\}/);
   assert.match(workflow, /source_run_attempt: \$\{\{ steps\.source\.outputs\.run_attempt \}\}/);
