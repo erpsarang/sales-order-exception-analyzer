@@ -466,3 +466,195 @@ test("상세 사본은 입력, 중복 항목 및 반복 호출 사이에서 독�
   });
   for (const details of copies.slice(1)) assert.deepEqual(details, expectedDetails);
 });
+
+test("예외 우선순위는 납기, 금액, 입력 위치 순이며 기존 결과와 집계를 보존한다", () => {
+  const details: Partial<OrderInput>[] = [
+    { estimatedAmount: 1000000 },
+    { dueDate: "2026-10-16", estimatedAmount: 999999 },
+    { dueDate: "2026-10-15", estimatedAmount: 10 },
+    { dueDate: "2026-10-15", estimatedAmount: 100 },
+    { dueDate: "2026-10-15" },
+    { dueDate: "2026-10-15", estimatedAmount: 0 },
+    { dueDate: "2026-10-15", estimatedAmount: 100 },
+    { dueDate: "2026-10-14" },
+    {},
+    { dueDate: "미정", estimatedAmount: 0 },
+  ];
+  const orders = Object.freeze([
+    Object.freeze({ ...normalOrder, dueDate: "0001-01-01", estimatedAmount: Number.MAX_VALUE }),
+    ...details.map((detail, index) => Object.freeze({ ...exceptionOrder, orderId: `P-${index}`, ...detail })),
+  ]);
+  const snapshot = orders.map((order) => ({ ...order }));
+  const batch = analyzeOrderBatch(orders);
+  const expectedIndices = [8, 4, 7, 3, 6, 5, 2, 1, 10, 9];
+  const expectedBases = [
+    { dueDate: "2026-10-14", estimatedAmount: null },
+    { dueDate: "2026-10-15", estimatedAmount: 100 },
+    { dueDate: "2026-10-15", estimatedAmount: 100 },
+    { dueDate: "2026-10-15", estimatedAmount: 10 },
+    { dueDate: "2026-10-15", estimatedAmount: 0 },
+    { dueDate: "2026-10-15", estimatedAmount: null },
+    { dueDate: "2026-10-16", estimatedAmount: 999999 },
+    { dueDate: null, estimatedAmount: 1000000 },
+    { dueDate: null, estimatedAmount: 0 },
+    { dueDate: null, estimatedAmount: null },
+  ];
+  assert.deepEqual(batch.exceptionPriorities, expectedIndices.map((resultIndex, index) => ({
+    rank: index + 1,
+    resultIndex,
+    orderId: orders[resultIndex]!.orderId,
+    basis: expectedBases[index],
+  })));
+  assert.deepEqual(batch.results, orders.map((order) => {
+    const { orderId, availableQuantity, customerBlocked, materialBlocked, ...orderDetails } = order;
+    return { orderId, orderDetails, ...analyzeOrder(order) };
+  }));
+  const baseline = analyzeOrderBatch([normalOrder, ...details.map((_, index) => ({ ...exceptionOrder, orderId: `P-${index}` }))]);
+  assert.deepEqual(batch.summary, baseline.summary);
+  assert.deepEqual(orders, snapshot);
+  assert.deepEqual(analyzeOrderBatch(orders), batch);
+});
+
+test("납기는 실제 YYYY-MM-DD와 연도 경계를 검증하고 원래 상세 값을 보존한다", () => {
+  const validDates = ["0001-01-01", "0096-02-29", "0400-02-29", "2000-02-29", "2024-02-29", "2026-04-30", "9999-12-31"];
+  const invalidDates: unknown[] = [
+    undefined, null, 20261015, false, "", "미정", "0000-01-01", "10000-01-01",
+    "0100-02-29", "1900-02-29", "2100-02-29", "2026-02-29", "2024-02-30",
+    "2026-04-31", "2026-06-31", "2026-09-31", "2026-11-31", "2026-01-32",
+    "2026-00-01", "2026-13-01", "2026-01-00", "2026-1-01", "2026-01-1",
+    " 2026-01-01", "2026-01-01 ", "2026-01-01\n", "2026/01/01",
+    "2026-01-01T00:00:00Z", "+026-01-01",
+  ];
+  for (const dueDate of [...validDates, ...invalidDates]) {
+    // 런타임 무효 타입은 입력 계약을 바꾸지 않고 경계 검증용으로만 전달한다.
+    const order = { ...exceptionOrder, dueDate } as unknown as OrderInput;
+    const batch = analyzeOrderBatch([order]);
+    const expectedDate = typeof dueDate === "string" && validDates.includes(dueDate) ? dueDate : null;
+    assert.deepEqual(batch.exceptionPriorities, [{
+      rank: 1, resultIndex: 0, orderId: order.orderId,
+      basis: { dueDate: expectedDate, estimatedAmount: null },
+    }]);
+    assert.equal(batch.results[0]!.orderDetails.dueDate, dueDate);
+    assert.deepEqual(batch.results[0]!.reasonCodes, analyzeOrder(order).reasonCodes);
+  }
+});
+
+test("금액은 유한한 비음수 숫자만 인정하고 누락 및 무효 값은 null로 반환한다", () => {
+  const validAmounts = [0, -0, 0.5, Number.MIN_VALUE, Number.MAX_VALUE];
+  const invalidAmounts: unknown[] = [undefined, null, -1, -0.5, NaN, Infinity, -Infinity, "0", "100", false, ""];
+  for (const estimatedAmount of [...validAmounts, ...invalidAmounts]) {
+    const order = { ...exceptionOrder, estimatedAmount } as unknown as OrderInput;
+    const batch = analyzeOrderBatch([order]);
+    const expectedAmount = typeof estimatedAmount === "number" && validAmounts.includes(estimatedAmount) ? estimatedAmount : null;
+    assert.deepEqual(batch.exceptionPriorities, [{
+      rank: 1, resultIndex: 0, orderId: order.orderId,
+      basis: { dueDate: null, estimatedAmount: expectedAmount },
+    }]);
+    assert.equal(batch.results[0]!.orderDetails.estimatedAmount, estimatedAmount);
+  }
+  const orders = [
+    { ...exceptionOrder, dueDate: "미정", estimatedAmount: NaN },
+    { ...exceptionOrder },
+    { ...exceptionOrder, dueDate: "2026-02-30", estimatedAmount: -1 },
+    { ...exceptionOrder, estimatedAmount: 0 },
+    { ...exceptionOrder, estimatedAmount: 0.5 },
+  ];
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.exceptionPriorities.map(({ resultIndex }) => resultIndex), [4, 3, 0, 1, 2]);
+  assert.deepEqual(batch.exceptionPriorities.slice(2).map(({ basis }) => basis), [
+    { dueDate: null, estimatedAmount: null },
+    { dueDate: null, estimatedAmount: null },
+    { dueDate: null, estimatedAmount: null },
+  ]);
+});
+
+test("동일 ID와 동일 객체의 예외 항목은 원래 결과 인덱스로 각각 연결된다", () => {
+  const shared = Object.freeze({ ...exceptionOrder, dueDate: "2026-10-16", estimatedAmount: 10 });
+  const orders = Object.freeze([
+    shared,
+    Object.freeze({ ...normalOrder, orderId: shared.orderId, dueDate: "0001-01-01" }),
+    Object.freeze({ ...shared, dueDate: "2026-10-15" }),
+    shared,
+    Object.freeze({ ...shared }),
+  ]);
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.exceptionPriorities.map(({ rank, resultIndex, orderId }) => ({ rank, resultIndex, orderId })), [
+    { rank: 1, resultIndex: 2, orderId: "SO-001" },
+    { rank: 2, resultIndex: 0, orderId: "SO-001" },
+    { rank: 3, resultIndex: 3, orderId: "SO-001" },
+    { rank: 4, resultIndex: 4, orderId: "SO-001" },
+  ]);
+  for (const priority of batch.exceptionPriorities) {
+    const result = batch.results[priority.resultIndex]!;
+    assert.equal(result.status, "EXCEPTION");
+    assert.equal(priority.orderId, result.orderId);
+    assert.deepEqual(priority.basis, {
+      dueDate: result.orderDetails.dueDate,
+      estimatedAmount: result.orderDetails.estimatedAmount,
+    });
+  }
+  assert.deepEqual(analyzeOrderBatch(orders), batch);
+});
+
+test("우선순위와 basis는 입력, 상세정보, 중복 항목 및 호출 사이에서 독립적이다", () => {
+  const order = { ...exceptionOrder, dueDate: "2026-10-15", estimatedAmount: 100 };
+  const orders = [order, order, { ...order }];
+  const snapshot = orders.map((input) => ({ ...input }));
+  const first = analyzeOrderBatch(orders);
+  const second = analyzeOrderBatch(orders);
+  assert.deepEqual(first, second);
+  assert.notStrictEqual(first.exceptionPriorities, second.exceptionPriorities);
+  const priorities = [...first.exceptionPriorities, ...second.exceptionPriorities];
+  priorities.forEach((priority, index) => {
+    for (const other of priorities.slice(index + 1)) {
+      assert.notStrictEqual(priority, other);
+      assert.notStrictEqual(priority.basis, other.basis);
+    }
+    for (const input of orders) assert.notStrictEqual(priority.basis, input);
+    for (const result of [...first.results, ...second.results]) {
+      assert.notStrictEqual(priority.basis, result.orderDetails);
+    }
+  });
+  first.exceptionPriorities[0]!.basis.dueDate = null;
+  first.exceptionPriorities[0]!.basis.estimatedAmount = 1;
+  first.exceptionPriorities[0]!.orderId = "CHANGED";
+  first.exceptionPriorities[0]!.resultIndex = 99;
+  first.exceptionPriorities[0]!.rank = 99;
+  assert.deepEqual(first.results, second.results);
+  assert.deepEqual(first.summary, second.summary);
+  assert.deepEqual(orders, snapshot);
+  for (const priority of priorities.slice(1)) {
+    assert.deepEqual(priority.basis, { dueDate: "2026-10-15", estimatedAmount: 100 });
+  }
+  first.exceptionPriorities.reverse();
+  first.exceptionPriorities.length = 0;
+  assert.deepEqual(analyzeOrderBatch(orders), second);
+  first.results[1]!.orderDetails.dueDate = "2027-01-01";
+  first.results[1]!.orderDetails.estimatedAmount = 999;
+  Object.assign(order, { dueDate: "2028-01-01", estimatedAmount: 0 });
+  for (const priority of priorities.slice(1)) {
+    assert.deepEqual(priority.basis, { dueDate: "2026-10-15", estimatedAmount: 100 });
+  }
+});
+
+test("빈 입력과 정상 주문만 있는 입력의 우선순위 배열은 비어 있고 호출마다 독립적이다", () => {
+  const batches = [
+    analyzeOrderBatch([]),
+    analyzeOrderBatch([]),
+    analyzeOrderBatch([normalOrder]),
+    analyzeOrderBatch([{ ...normalOrder, dueDate: "0001-01-01", estimatedAmount: Number.MAX_VALUE }]),
+  ];
+  batches.forEach((batch, index) => {
+    assert.deepEqual(batch.exceptionPriorities, []);
+    for (const other of batches.slice(index + 1)) {
+      assert.notStrictEqual(batch.exceptionPriorities, other.exceptionPriorities);
+    }
+  });
+  batches[0]!.exceptionPriorities.push({
+    rank: 1, resultIndex: 0, orderId: "CHANGED",
+    basis: { dueDate: null, estimatedAmount: null },
+  });
+  for (const batch of batches.slice(1)) assert.deepEqual(batch.exceptionPriorities, []);
+  assert.deepEqual(analyzeOrderBatch([]).exceptionPriorities, []);
+  assert.deepEqual(analyzeOrderBatch([normalOrder]).exceptionPriorities, []);
+});
