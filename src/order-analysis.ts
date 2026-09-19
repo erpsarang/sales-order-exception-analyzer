@@ -6,6 +6,12 @@ export interface OrderInput {
   availableQuantity: number;
   customerBlocked: boolean;
   materialBlocked: boolean;
+  /** 예상 금액은 입력 측 단위의 숫자로 표현하며 계산하거나 통화 환산하지 않는다. */
+  estimatedAmount?: number;
+  /** 납기일은 시간대 없는 YYYY-MM-DD 문자열로 표현한다. */
+  dueDate?: string;
+  /** 주문 코멘트는 일반 텍스트로 표현한다. */
+  orderComment?: string;
 }
 
 export type ReasonCode =
