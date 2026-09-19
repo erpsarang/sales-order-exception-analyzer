@@ -258,8 +258,12 @@ export function validatePlanCandidateWorkerSource(
   if (source.workflowName !== PLAN_IMPLEMENT_WORKER_WORKFLOW_NAME || source.workflowPath !== PLAN_IMPLEMENT_WORKER_WORKFLOW_PATH) {
     throw new Error("unexpected Worker source workflow");
   }
-  if (source.event !== "workflow_run" || source.conclusion !== "success") {
-    throw new Error("Worker source is not a successful workflow_run");
+  const recovery = recoveryGuard?.kind === "trusted-recovery-compare-v1";
+  const eventAllowed =
+    source.event === "workflow_run" ||
+    (recovery && source.event === "workflow_dispatch");
+  if (!eventAllowed || source.conclusion !== "success") {
+    throw new Error("Worker source is not an allowed successful run");
   }
   if (source.headBranch !== source.defaultBranch) throw new Error("Worker source is not on the default branch");
   assertSha("Worker source head SHA", source.headSha);
@@ -267,14 +271,25 @@ export function validatePlanCandidateWorkerSource(
   if (source.id !== provenance.worker.runId || source.runAttempt !== provenance.worker.runAttempt) {
     throw new Error("Worker source run identity mismatch");
   }
-  if (source.headSha !== provenance.baseSha) throw new Error("Worker source head SHA mismatch");
-  if (source.currentDefaultSha !== provenance.baseSha) {
+
+  if (!recovery) {
+    if (source.headSha !== provenance.baseSha) throw new Error("Worker source head SHA mismatch");
+    if (source.currentDefaultSha !== provenance.baseSha) {
+      throw new Error("default branch moved after Worker; re-plan required");
+    }
+  } else {
     if (
-      recoveryGuard?.kind !== "trusted-recovery-compare-v1" ||
       recoveryGuard.baseSha !== provenance.baseSha ||
       recoveryGuard.currentDefaultSha !== source.currentDefaultSha
     ) {
-      throw new Error("default branch moved after Worker; re-plan required");
+      throw new Error("trusted recovery guard does not bind Worker base/current SHA");
+    }
+    if (source.event === "workflow_dispatch") {
+      if (source.headSha !== recoveryGuard.currentDefaultSha) {
+        throw new Error("recovery Worker trusted code SHA mismatch");
+      }
+    } else if (source.headSha !== provenance.baseSha) {
+      throw new Error("recovery Worker source head SHA mismatch");
     }
   }
 
