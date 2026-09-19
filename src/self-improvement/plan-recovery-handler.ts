@@ -9,6 +9,7 @@ import {
 } from "./plan-implement-handoff.js";
 import {
   classifyPlanRecovery,
+  planRecoveryMarker,
   type PlanRunObservation,
 } from "./plan-recovery.js";
 
@@ -150,7 +151,7 @@ async function main(): Promise<void> {
   output("target_sha", currentDefaultSha);
   if (!decision.required) return;
 
-  const marker = `<!-- self-improvement:AUTO_REPLAN authorization-digest=${authorization.authorizationDigest} -->`;
+  const marker = planRecoveryMarker(authorization.authorizationDigest, currentDefaultSha);
   const comments = await allComments(owner, repo, authorization.requirement.issueNumber);
   if (comments.some((comment) => typeof comment.body === "string" && comment.body.includes(marker))) {
     output("dispatched", false);
