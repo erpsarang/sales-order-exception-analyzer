@@ -299,6 +299,7 @@ jobs:
           allow-bot-users: "github-actions[bot]"
           model: gpt-5.6-terra
           effort: none
+          codex-home: ${{ runner.temp }}/fix-codex-home
 
       - name: trusted prompt 제거
         shell: bash
@@ -319,6 +320,37 @@ jobs:
         with:
           name: fix-workspace-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/fix-workspace.tar.gz
+          if-no-files-found: error
+
+      - name: exact trusted usage control-plane checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.trusted_code_sha }}
+          path: usage-control
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - name: trusted usage parser 의존성 설치
+        working-directory: usage-control
+        run: npm ci --ignore-scripts
+
+      - name: CODEX_HOME persisted FIX usage exact 기록
+        id: usage
+        working-directory: usage-control
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/fix-codex-home
+          AI_USAGE_STAGE: fix
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: worker
+          AI_USAGE_JSON: ${{ runner.temp }}/fix-usage/fix-usage.json
+
+      - name: trusted FIX usage artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/fix-usage/fix-usage.json
           if-no-files-found: error
 
   validate:
