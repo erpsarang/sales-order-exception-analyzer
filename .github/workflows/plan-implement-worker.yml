@@ -599,6 +599,8 @@ jobs:
           test -f "$RUNNER_TEMP/plan-worker-input/schema.json"
 
       - name: Untrusted bounded IMPLEMENT timeout retry
+        id: implement_retry
+        continue-on-error: true
         timeout-minutes: 6
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
@@ -618,6 +620,7 @@ jobs:
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: timeout retry raw proposal artifact 저장
+        if: steps.implement_retry.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: bounded-worker-raw-proposal-timeout-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -625,10 +628,12 @@ jobs:
           if-no-files-found: error
 
       - name: timeout retry input 제거
+        if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/plan-worker-input"
 
       - name: Trusted validation checkout retry
+        if: always()
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -636,6 +641,7 @@ jobs:
           path: control-validate-retry
 
       - name: Node 설정 retry
+        if: always()
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -643,10 +649,12 @@ jobs:
           cache-dependency-path: control-validate-retry/package-lock.json
 
       - name: Trusted validation dependencies 설치 retry
+        if: always()
         working-directory: control-validate-retry
         run: npm ci --ignore-scripts
 
       - name: CODEX_HOME persisted bounded IMPLEMENT timeout retry usage exact 기록
+        if: steps.implement_retry.outcome == 'success'
         id: usage_retry
         working-directory: control-validate-retry
         run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
@@ -659,16 +667,59 @@ jobs:
           AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
 
       - name: trusted bounded IMPLEMENT timeout retry usage artifact 저장
+        if: steps.implement_retry.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.usage_retry.outputs.artifact_name }}
           path: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
           if-no-files-found: error
 
+      - name: CODEX_HOME persisted bounded IMPLEMENT timeout retry failure usage 관찰
+        if: steps.implement_retry.outcome == 'failure'
+        id: retry_failure_usage
+        working-directory: control-validate-retry
+        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-timeout-retry
+          AI_USAGE_STAGE: bounded-implement-timeout-retry
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: timeout_retry
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
+          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/timeout-retry-failure.json
+
+      - name: trusted bounded IMPLEMENT timeout retry failure usage artifact 저장
+        if: steps.retry_failure_usage.outputs.status == 'recorded'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.retry_failure_usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
+          if-no-files-found: error
+
+      - name: trusted bounded IMPLEMENT timeout retry failure usage unavailable observation 저장
+        if: steps.retry_failure_usage.outputs.status == 'unavailable'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.retry_failure_usage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage-observation/timeout-retry-failure.json
+          if-no-files-found: error
+
       - name: timeout retry CODEX_HOME 제거
         if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/worker-codex-home-timeout-retry"
+
+      - name: timeout retry 실행 결과 확인
+        if: always()
+        shell: bash
+        env:
+          RETRY_OUTCOME: ${{ steps.implement_retry.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$RETRY_OUTCOME" != "success" ]; then
+            echo "bounded IMPLEMENT timeout retry failed after usage observation" >&2
+            exit 1
+          fi
 
       - name: Trusted handoff artifact 재다운로드 retry
         uses: actions/download-artifact@v4
