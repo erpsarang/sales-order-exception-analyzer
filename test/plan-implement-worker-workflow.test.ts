@@ -54,6 +54,37 @@ test("PLAN Worker는 timeout 경계 failure만 fresh runner에서 1회 bounded �
 });
 
 
+test("bounded IMPLEMENT timeout retry usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
+  const retry = workflow.slice(workflow.indexOf("\n  timeout_retry:\n"), workflow.indexOf("\n  attempt0_result:\n"));
+  const rawIndex = retry.indexOf("timeout retry raw proposal artifact 저장");
+  const checkoutIndex = retry.indexOf("Trusted validation checkout retry");
+  const usageIndex = retry.indexOf("CODEX_HOME persisted bounded IMPLEMENT timeout retry usage exact 기록");
+  const usageArtifactIndex = retry.indexOf("trusted bounded IMPLEMENT timeout retry usage artifact 저장");
+  const cleanupIndex = retry.indexOf("timeout retry CODEX_HOME 제거");
+  const candidateValidationIndex = retry.indexOf("Trusted candidate 검증 retry");
+
+  assert.ok(rawIndex >= 0);
+  assert.ok(checkoutIndex > rawIndex);
+  assert.ok(usageIndex > checkoutIndex);
+  assert.ok(usageArtifactIndex > usageIndex);
+  assert.ok(cleanupIndex > usageArtifactIndex);
+  assert.ok(candidateValidationIndex > cleanupIndex);
+
+  assert.match(retry, /bounded-worker-raw-proposal-timeout-retry-/);
+  assert.match(retry, /working-directory: control-validate-retry[\s\S]*ai-usage-rollout-handler\.ts/);
+  assert.match(retry, /CODEX_HOME_PATH: \$\{\{ runner\.temp \}\}\/worker-codex-home-timeout-retry/);
+  assert.match(retry, /AI_USAGE_STAGE: bounded-implement-timeout-retry/);
+  assert.match(retry, /AI_USAGE_JOB_NAME: timeout_retry/);
+  assert.match(retry, /bounded-implement-usage\/timeout-retry\.json/);
+  assert.doesNotMatch(retry, /actions\/jobs\/.*\/logs/);
+
+  const inputCleanup = retry.slice(
+    retry.indexOf("      - name: timeout retry input 제거"),
+    retry.indexOf("      - name: Trusted validation checkout retry"),
+  );
+  assert.doesNotMatch(inputCleanup, /worker-codex-home-timeout-retry/);
+});
+
 test("bounded IMPLEMENT attempt0 usage는 raw proposal 보존 뒤 trusted same-job에서 수집한다", () => {
   const attempt0 = workflow.slice(workflow.indexOf("\n  attempt0:\n"), workflow.indexOf("\n  timeout_retry:\n"));
   const rawIndex = attempt0.indexOf("attempt0 raw proposal artifact 저장");

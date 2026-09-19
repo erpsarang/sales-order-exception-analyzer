@@ -569,9 +569,16 @@ jobs:
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
+      - name: timeout retry raw proposal artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-worker-raw-proposal-timeout-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-output/raw-proposal.json
+          if-no-files-found: error
+
       - name: timeout retry input 제거
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
+        run: rm -rf "$RUNNER_TEMP/plan-worker-input"
 
       - name: Trusted validation checkout retry
         uses: actions/checkout@v4
@@ -590,6 +597,30 @@ jobs:
       - name: Trusted validation dependencies 설치 retry
         working-directory: control-validate-retry
         run: npm ci --ignore-scripts
+
+      - name: CODEX_HOME persisted bounded IMPLEMENT timeout retry usage exact 기록
+        id: usage_retry
+        working-directory: control-validate-retry
+        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
+        env:
+          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-timeout-retry
+          AI_USAGE_STAGE: bounded-implement-timeout-retry
+          AI_USAGE_RUN_ID: ${{ github.run_id }}
+          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AI_USAGE_JOB_NAME: timeout_retry
+          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
+
+      - name: trusted bounded IMPLEMENT timeout retry usage artifact 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.usage_retry.outputs.artifact_name }}
+          path: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
+          if-no-files-found: error
+
+      - name: timeout retry CODEX_HOME 제거
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
       - name: Trusted handoff artifact 재다운로드 retry
         uses: actions/download-artifact@v4
