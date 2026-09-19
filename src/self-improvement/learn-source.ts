@@ -393,7 +393,12 @@ export function createTrustedLearnSourceArtifacts(
   const bridge = planSource === undefined ? undefined : asObject("sourcePlanBridge.bridge", planSource.bridge);
   // Older recovery-only records have no execution provenance.
   const recoveryOnly = bridge !== undefined && Object.keys(bridge).length === 1 && Object.hasOwn(bridge, "recoveryGuard");
-  if (bridge !== undefined && !recoveryOnly) {
+  if (bridge !== undefined && !recoveryOnly && seal.sourceFix === undefined) {
+    // Only a direct PLAN candidate can contribute exact test-execution evidence.
+    // FIX cycles have a different final candidate; reusing the original PLAN validation
+    // would misrepresent historical execution as validation of the final FIX candidate.
+    // validateVerifyProvenanceForReview() already validates the final FIX → SEAL → PUBLISH
+    // → VERIFY chain before this optional evidence projection.
     // Validate the original nested objects, before projecting or bounding their content.
     // This includes the canonical validation/bridge digests and artifact/run bindings.
     const verify = validateVerifyProvenanceForReview({
