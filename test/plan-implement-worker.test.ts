@@ -211,6 +211,7 @@ test("validated candidate provenance는 source handoff/Worker attempt/exact dige
 test("recovery candidate provenance도 exact trusted recovery guard를 유지한다", () => {
   const { bundle, context, approved } = fixture();
   const file = context.files[0]!;
+  assert.equal(file.state, "present");
   const candidate = createCandidateChangeSet(bundle.contract, bundle.context, {
     summary: "README 상태 설명 추가",
     changes: [{
