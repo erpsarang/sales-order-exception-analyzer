@@ -430,7 +430,11 @@ test("브라우저 Web 신규 기능 PLAN은 package.json과 tsconfig.json을 �
       ].join("\n"),
     );
 
-    const requirement = "브라우저에서 주문 CSV 파일을 올리고 분석 결과를 확인하고 싶다.";
+    const requirement = [
+      "브라우저에서 주문 CSV 파일을 올리고 분석 결과를 확인하고 싶다.",
+      "기존 분석 엔진을 재사용하고 Web 전용으로 판정 로직을 복제하지 않는다.",
+      "이번 범위에서 제외: 사용자 로그인/권한, 데이터베이스 저장, 운영 배포/HTTPS 구성.",
+    ].join("\n");
     const options = { maxFiles: 4, maxBytes: 16_000, maxFileBytes: 4_000 };
     const selected = selectPlanContext(requirement, root, "example/orders", "e".repeat(40), options);
     const selectedPaths = selected.files.map((file) => file.path);

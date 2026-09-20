@@ -300,7 +300,9 @@ function projectBootstrapContextPaths<T extends { path: string }>(
   candidates: readonly T[],
 ): string[] {
   const hasWebIntent = /(?:브라우저|웹|browser|web|frontend|front-end|vite)/i.test(requirement);
-  const excludesWeb = /(?:브라우저|웹|browser|web|frontend|front-end|vite).{0,40}(?:제외|범위 밖|하지 않|사용하지 않|out of scope|exclude)/i.test(requirement);
+  const excludesWeb =
+    /(?:^|[\n.!?])\s*[-*]?\s*(?:브라우저|웹|browser|web|frontend|front-end)(?:\s*(?:화면|기능|구현|앱|app|application))?[^.\n]{0,40}(?:제외|범위 밖|out of scope|exclude)/im.test(requirement) ||
+    /(?:^|[\n.!?])\s*[-*]?\s*(?:브라우저|웹|browser|web|frontend|front-end)(?:\s*(?:화면|기능|구현|앱|app|application))?\s*(?:은|는|을|를|이|가)?\s*(?:사용하지 않|구현하지 않|하지 않)/im.test(requirement);
   if (!hasWebIntent || excludesWeb) return [];
 
   const available = new Set(candidates.map((candidate) => candidate.path));
