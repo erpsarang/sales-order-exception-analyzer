@@ -10,7 +10,13 @@ export function needsHumanOutputPlanContext(requirement: string): boolean {
   const englishCommentIntent =
     /\b(issue|pull request|pr)\b.{0,30}\bcomment\b|\b(add|post|write|publish)\b.{0,20}\bcomment\b/.test(lower);
 
-  return koreanOutputIntent || koreanCommentIntent || englishOutputIntent || englishCommentIntent;
+  const frameworkOutputContext =
+    /\b(?:PLAN|PLAN_AUTHORIZE|IMPLEMENT|VERIFY|MERGE_READY|STOPPED)\b/.test(requirement) ||
+    /(?:워크플로|workflow|orchestrator|trusted rail|self-improvement|framework)/i.test(requirement) ||
+    (/`[A-Z][A-Z0-9_]{2,79}`/.test(requirement) && /(?:상태|state)/i.test(requirement));
+
+  return koreanCommentIntent || englishCommentIntent ||
+    ((koreanOutputIntent || englishOutputIntent) && frameworkOutputContext);
 }
 
 export function planImpactTestScopeGuidance(): string {

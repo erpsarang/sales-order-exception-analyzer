@@ -220,7 +220,7 @@ test("사용자/Human provenance만 있는 business requirement는 Human Output 
 });
 
 
-test("Web PLAN의 프로젝트 설정은 business/human-output augmentation 뒤에도 보존된다", () => {
+test("Web App UI 요구는 Framework human-output surface를 추가하지 않고 App 계약을 보존한다", () => {
   const root = mkdtempSync(join(tmpdir(), "planner-web-project-config-"));
   try {
     mkdirSync(join(root, "src"));
@@ -267,25 +267,24 @@ test("Web PLAN의 프로젝트 설정은 business/human-output augmentation 뒤�
       "name: Worker\nscript: |\n  await github.rest.issues.createComment({ body: 'human output' });\n",
     );
 
-    const requirement = "브라우저에서 주문 CSV 파일을 올리고 분석 결과를 화면에 표시하고 싶다.";
+    const requirement = [
+      "브라우저에서 주문 CSV 파일을 올리고 분석 결과를 화면에 표시하고 싶다.",
+      "기존 CLI의 JSON/CSV 입력 기능은 그대로 유지한다.",
+      "기존 분석 엔진을 재사용하고 Web 전용 판정 로직을 복제하지 않는다.",
+    ].join("\n");
     const selected = selectPlanContext(requirement, root, "example/orders", "f".repeat(40));
     assert.ok(selected.files.some((file) => file.path === "package.json"));
     assert.ok(selected.files.some((file) => file.path === "tsconfig.json"));
 
     const business = augmentPlanContextWithBusinessRelations(requirement, root, selected);
-    assert.ok(business.files.some((file) => file.path === "package.json"));
-    assert.ok(business.files.some((file) => file.path === "tsconfig.json"));
+    const businessPaths = business.files.map((file) => file.path);
+    assert.ok(businessPaths.includes("package.json"));
+    assert.ok(businessPaths.includes("tsconfig.json"));
+    assert.ok(businessPaths.includes("src/order-analysis-cli.ts"), `missing existing CLI contract: ${businessPaths.join(", ")}`);
+    assert.ok(businessPaths.includes("test/order-analysis-cli.test.ts"), `missing existing CLI test: ${businessPaths.join(", ")}`);
 
     const augmented = augmentPlanContextWithHumanOutputSurfaces(requirement, root, business);
-    const paths = augmented.files.map((file) => file.path);
-
-    assert.ok(paths.includes("package.json"), `package.json was evicted: ${paths.join(", ")}`);
-    assert.ok(paths.includes("tsconfig.json"), `tsconfig.json was evicted: ${paths.join(", ")}`);
-    assert.ok(
-      paths.includes(".github/workflows/orchestrator.yml") ||
-        paths.includes(".github/workflows/plan-implement-worker.yml"),
-      `human-output surface was not added: ${paths.join(", ")}`,
-    );
+    assert.deepEqual(augmented, business);
     assert.doesNotThrow(() => verifyPlanContextPack(augmented));
   } finally {
     rmSync(root, { recursive: true, force: true });
