@@ -1,3 +1,4 @@
+import { PLAN_TRIGGER_EVENTS } from "./lineage/sources.js";
 import type { PlanAuthorizeArtifact } from "./plan-authorization.js";
 
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
@@ -73,7 +74,7 @@ export function classifyPlanRecovery(
   if (
     planRun.name !== "Read-only AI PLAN" ||
     planRun.path !== PLAN_WORKFLOW_PATH ||
-    planRun.event !== "workflow_dispatch" ||
+    !(PLAN_TRIGGER_EVENTS as readonly string[]).includes(planRun.event) ||
     planRun.status !== "completed" ||
     planRun.conclusion !== "success" ||
     planRun.headBranch !== defaultBranch ||

@@ -6,7 +6,8 @@
  *
  * Step 1A에서는 vocabulary와 정규화 pure function만 추가한다.
  * STAGE_PRODUCERS 표는 "현재 코드가 실제로 허용하는 조합"을 그대로 옮긴 것이며,
- * 현재 stage 간 불일치(P1/P2)도 그대로 기록한다. 통합은 후속 단계에서 한다.
+ * 아직 남아 있는 stage 간 불일치(P2)도 그대로 기록한다. 통합은 후속 단계에서 한다.
+ * (P1: plan-recovery의 PLAN source event 불일치는 Step 1B-1에서 PLAN_TRIGGER_EVENTS로 통합됨)
  */
 import { WORKFLOWS, type WorkflowKey } from "./constants.js";
 
@@ -234,18 +235,28 @@ export function normalizeTrigger(event: RawSourceEvent): LineageTrigger {
 }
 
 /**
+ * PLAN workflow가 정상적으로 시작될 수 있는 GitHub event의 canonical 집합 (단일 진실).
+ * plan-recovery.ts는 이 값을 직접 사용한다 (Step 1B-1).
+ */
+export const PLAN_TRIGGER_EVENTS: readonly GitHubEventName[] = Object.freeze(["workflow_dispatch", "issues"]);
+
+/**
  * 어떤 stage가 "상류 run의 event"로 무엇을 받아들이는지에 대한 현재 코드의 사실.
  * key = 검사하는 쪽, value = 상류 run에 허용된 GitHub event.
  *
- * 불일치가 그대로 보인다:
- *  - PLAN run: authorize/handoff는 [workflow_dispatch, issues], plan-recovery는 [workflow_dispatch]만 (P1)
+ * PLAN run:
+ *  - plan-recovery classifier는 PLAN_TRIGGER_EVENTS를 runtime에서 직접 사용하므로 여기서도 같은 객체를 참조한다
+ *    (값을 복제하지 않는다. P1은 Step 1B-1에서 해소됨).
+ *  - authorize/handoff handler는 아직 자기 파일에 리터럴을 갖고 있어 그 사실을 데이터로 적고,
+ *    PLAN_TRIGGER_EVENTS 및 handler 소스와의 parity를 테스트로 고정한다.
+ * 아직 남아 있는 불일치:
  *  - Handoff run: worker/bridge는 [workflow_run, issue_comment], preflight는 [workflow_run]만 (P2)
  */
 export const UPSTREAM_EVENT_ACCEPTANCE = Object.freeze({
   planRunAcceptedBy: Object.freeze({
     planAuthorizeHandler: ["workflow_dispatch", "issues"],
     planImplementHandoffHandler: ["workflow_dispatch", "issues"],
-    planRecoveryClassifier: ["workflow_dispatch"],
+    planRecoveryClassifier: PLAN_TRIGGER_EVENTS,
   } as const),
   handoffRunAcceptedBy: Object.freeze({
     planImplementWorkerWorkflow: ["workflow_run", "issue_comment"],
@@ -258,6 +269,3 @@ export const UPSTREAM_EVENT_ACCEPTANCE = Object.freeze({
     trustedRailPlanBridge: ["workflow_run", "workflow_dispatch"],
   } as const),
 } as const);
-
-/** PLAN workflow가 정상적으로 시작될 수 있는 GitHub event의 canonical 집합. */
-export const PLAN_TRIGGER_EVENTS: readonly GitHubEventName[] = Object.freeze(["workflow_dispatch", "issues"]);
