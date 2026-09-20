@@ -246,6 +246,7 @@ jobs:
               'test/plan-implement-worker.test.ts',
               'test/plan-worker-recovery-preflight-workflow.test.ts',
               'test/plan-trusted-rail-recovery-source.test.ts',
+              'test/review-workflow.test.ts',
               'test/seal-workflow.test.ts',
             ]);
             const frameworkTest = (path) =>
