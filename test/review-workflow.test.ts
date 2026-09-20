@@ -69,14 +69,18 @@ test("Semantic REVIEW는 AI 호출 전에 bounded patch를 만들고 full checko
   assert.doesNotMatch(agentSection, /effort: high/);
 });
 
-test("Semantic REVIEW는 Codex JSONL usage를 trusted artifact로 기록한다", () => {
+test("Semantic REVIEW는 persisted Codex rollout을 trusted artifact usage로 기록한다", () => {
   assert.match(agentSection, /codex-args: '\["--json","-c","project_doc_max_bytes=0"\]'/);
-  assert.match(usageSection, /attempts\/\{attempt_number\}\/jobs/);
-  assert.match(usageSection, /isolated AI Semantic Reviewer/);
-  assert.match(usageSection, /actions\/jobs\/\$\{REVIEWER_JOB_ID\}\/logs/);
-  assert.match(usageSection, /ai-usage-handler\.ts/);
+  assert.match(agentSection, /semantic-review-codex-home\/sessions/);
+  assert.match(agentSection, /semantic-review-rollout-issue-/);
+  assert.match(usageSection, /persisted Semantic Reviewer rollout artifact 다운로드/);
+  assert.match(usageSection, /semantic-review-rollout-issue-/);
+  assert.match(usageSection, /ai-usage-rollout-handler\.ts/);
+  assert.match(usageSection, /CODEX_HOME_PATH:/);
+  assert.match(usageSection, /AI_USAGE_JOB_NAME: isolated AI Semantic Reviewer/);
   assert.match(usageSection, /AI_USAGE_STAGE: semantic-review/);
   assert.match(usageSection, /ai-usage-/);
+  assert.doesNotMatch(usageSection, /actions\/jobs\/.*\/logs|CODEX_JOB_LOG|ai-usage-handler\.ts/);
   assert.doesNotMatch(usageSection, /openai-api-key|codex-action/);
 });
 
