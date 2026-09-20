@@ -451,7 +451,7 @@ export function createPlanImplementContract(
       }
       allowedPaths.push("package-lock.json");
     }
-    requiredChanges.push("package.json 변경 시 package-lock.json을 같은 candidate에서 동기화한다.");
+    requiredChanges.push("package.json을 변경하더라도 package-lock.json은 작성하지 않는다. package-lock.json은 trusted deterministic step이 생성해 같은 candidate에 포함한다. 의존성은 npm registry의 semver 버전으로만 지정한다.");
   }
 
   const identity = {

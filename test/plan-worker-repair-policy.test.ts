@@ -92,7 +92,7 @@ test("allowedPaths 밖 source라도 boundary signal이 없으면 성급하게 �
   assert.equal(result.allowed, true);
 });
 
-test("npm ci lock sync 실패에서 package-lock.json이 범위 밖이면 AI repair를 차단한다", () => {
+test("npm ci lock sync 실패는 package-lock.json이 범위 밖이면 AI repair를 차단한다", () => {
   const base = validation("", [
     "npm error `npm ci` can only install packages when your package.json and package-lock.json are in sync.",
     "npm error Missing: vite@6.4.3 from lock file",
@@ -108,12 +108,12 @@ test("npm ci lock sync 실패에서 package-lock.json이 범위 밖이면 AI rep
 
   assert.deepEqual(classifyRepairEligibility(allowedPaths, lockFailure), {
     allowed: false,
-    reason: "OUT_OF_SCOPE_BOUNDARY",
+    reason: "DEPENDENCY_LOCK_MISMATCH",
     sourcePaths: ["package-lock.json"],
   });
 });
 
-test("npm ci lock sync 실패라도 package-lock.json이 허용 범위면 bounded repair를 허용한다", () => {
+test("npm ci lock sync 실패는 package-lock.json이 허용 범위여도 AI repair를 호출하지 않는다 (#176 run 35514242090)", () => {
   const base = validation("", "npm error Missing: vite@6.4.3 from lock file");
   const lockFailure: DeterministicValidationResult = {
     ...base,
@@ -124,8 +124,17 @@ test("npm ci lock sync 실패라도 package-lock.json이 허용 범위면 bounde
     }],
   };
 
-  const result = classifyRepairEligibility([...allowedPaths, "package-lock.json"], lockFailure);
-  assert.equal(result.allowed, true);
-  assert.deepEqual(result.sourcePaths, ["package-lock.json"]);
+  assert.deepEqual(classifyRepairEligibility([...allowedPaths, "package.json", "package-lock.json"], lockFailure), {
+    allowed: false,
+    reason: "DEPENDENCY_LOCK_MISMATCH",
+    sourcePaths: ["package-lock.json"],
+  });
+  // lock 신호가 없는 일반 npm ci 실패(예: registry 장애)는 이 분류에 걸리지 않는다.
+  const other = validation("", "npm error code E503");
+  const otherFailure: DeterministicValidationResult = {
+    ...other,
+    commands: [{ ...other.commands[0]!, raw: "npm ci --ignore-scripts", args: ["ci", "--ignore-scripts"] }],
+  };
+  assert.equal(classifyRepairEligibility([...allowedPaths, "package-lock.json"], otherFailure).reason, "REPAIR_ALLOWED");
 });
 
