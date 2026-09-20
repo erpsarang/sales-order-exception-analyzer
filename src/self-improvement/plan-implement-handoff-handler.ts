@@ -9,6 +9,7 @@ import {
   createPlanImplementHandoffManifest,
   createPlanRebindProvenance,
   PLAN_AUTHORIZE_WORKFLOW_PATH,
+  PLAN_REBIND_MAX_DRIFT_FILES,
   PLAN_WORKFLOW_PATH,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
@@ -198,7 +199,7 @@ async function prepare(): Promise<void> {
       comparison.status !== "ahead" ||
       comparison.merge_base_commit?.sha !== authorization.targetSha ||
       files.length < 1 ||
-      files.length > 12
+      files.length > PLAN_REBIND_MAX_DRIFT_FILES
     ) {
       throw new Error("PLAN rebind drift is not a bounded ancestor diff");
     }
