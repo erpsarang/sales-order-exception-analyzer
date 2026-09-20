@@ -11,8 +11,10 @@ import {
   createPlanImplementHandoffManifest,
   planImplementHandoffArtifactName,
   verifyPlanAuthorizeArtifact,
+  verifyPlanRebindProvenance,
   type PlanAuthorizeArtifactMetadata,
   type PlanImplementHandoffManifest,
+  type PlanRebindProvenance,
 } from "./plan-implement-handoff.js";
 import type { PlanAuthorizeArtifact } from "./plan-authorization.js";
 import {
@@ -68,6 +70,7 @@ export interface PlanImplementWorkerBundle {
   readonly handoff: PlanImplementHandoffManifest;
   readonly authorization: PlanAuthorizeArtifact;
   readonly sourcePlanAuthorizeArtifact: PlanAuthorizeArtifactMetadata;
+  readonly rebind?: PlanRebindProvenance;
   readonly prompt: string;
 }
 
@@ -133,15 +136,20 @@ function parsePlanAuthorizeArtifactMetadata(value: unknown): PlanAuthorizeArtifa
 function verifySourceRecord(value: unknown): {
   authorization: PlanAuthorizeArtifact;
   sourceArtifact: PlanAuthorizeArtifactMetadata;
+  rebind?: PlanRebindProvenance;
 } {
   if (!record(value)) throw new Error("handoff source record must be an object");
-  const expectedKeys = ["authorization", "sourceArtifact"];
+  const hasRebind = value.rebind !== undefined;
+  const expectedKeys = hasRebind ? ["authorization", "rebind", "sourceArtifact"] : ["authorization", "sourceArtifact"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)) {
     throw new Error("handoff source record shape is invalid");
   }
+  const authorization = verifyPlanAuthorizeArtifact(value.authorization);
+  const rebind = hasRebind ? verifyPlanRebindProvenance(value.rebind, authorization) : undefined;
   return {
-    authorization: verifyPlanAuthorizeArtifact(value.authorization),
+    authorization,
     sourceArtifact: parsePlanAuthorizeArtifactMetadata(value.sourceArtifact),
+    ...(rebind ? { rebind } : {}),
   };
 }
 
@@ -159,8 +167,9 @@ export function verifyPlanImplementWorkerBundle(input: {
   verifyImplementContextPack(context, contract);
 
   const source = verifySourceRecord(input.source);
-  if (source.authorization.repository !== contract.repository || source.authorization.targetSha !== contract.baseSha) {
-    throw new Error("handoff source authorization is not bound to contract identity");
+  const expectedBaseSha = source.rebind?.reboundTargetSha ?? source.authorization.targetSha;
+  if (source.authorization.repository !== contract.repository || expectedBaseSha !== contract.baseSha) {
+    throw new Error("handoff source authorization/rebind is not bound to contract identity");
   }
 
   const expectedHandoff = createPlanImplementHandoffManifest({
@@ -168,6 +177,7 @@ export function verifyPlanImplementWorkerBundle(input: {
     sourceArtifact: source.sourceArtifact,
     contract,
     contextDigest: context.contextDigest,
+    ...(source.rebind ? { rebind: source.rebind } : {}),
   });
   if (!record(input.handoff) || JSON.stringify(input.handoff) !== JSON.stringify(expectedHandoff)) {
     throw new Error("handoff manifest mismatch");
@@ -187,6 +197,7 @@ export function verifyPlanImplementWorkerBundle(input: {
     handoff: expectedHandoff,
     authorization: source.authorization,
     sourcePlanAuthorizeArtifact: source.sourceArtifact,
+    ...(source.rebind ? { rebind: source.rebind } : {}),
     prompt: expectedPrompt,
   };
 }
@@ -205,8 +216,9 @@ export function validatePlanImplementWorkerSource(
   if (source.workflowName !== PLAN_IMPLEMENT_HANDOFF_WORKFLOW_NAME || source.workflowPath !== PLAN_IMPLEMENT_HANDOFF_WORKFLOW_PATH) {
     throw new Error("unexpected source handoff workflow");
   }
-  if (source.event !== "workflow_run" || source.conclusion !== "success") {
-    throw new Error("source handoff run is not a successful workflow_run");
+  const expectedEvent = bundle.rebind ? "issue_comment" : "workflow_run";
+  if (source.event !== expectedEvent || source.conclusion !== "success") {
+    throw new Error(`source handoff run is not a successful ${expectedEvent}`);
   }
   if (source.headBranch !== source.defaultBranch) throw new Error("source handoff is not on the default branch");
   if (!GIT_SHA.test(source.headSha) || !GIT_SHA.test(source.currentDefaultSha)) throw new Error("invalid source handoff SHA");
