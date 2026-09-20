@@ -31,7 +31,42 @@ export type LineageTrigger =
   | "REBIND_REQUEST"       // issue_comment "PLAN-재개" → Handoff (rebind)
   | "UPSTREAM_COMPLETION"  // workflow_run(completed, success) of the expected upstream
   | "RECOVERY_PREFLIGHT"   // workflow_run of Trusted Worker Recovery Preflight → Worker
-  | "EXPLICIT_RECOVERY";   // workflow_dispatch with exact source identity → Bridge / Rail
+  | "EXPLICIT_RECOVERY"    // workflow_dispatch with exact source identity → Bridge / Rail
+  | "SAME_RUN_CONTINUATION"; // 같은 workflow run 안에서 이어지는 job (Rail: seal → publish → verify)
+
+/** 외부 JSON을 검증할 때 쓰는 runtime 집합. TypeScript union과 항상 같아야 한다. */
+export const LINEAGE_STAGES: readonly LineageStage[] = Object.freeze([
+  "plan",
+  "plan-authorize",
+  "plan-recovery",
+  "handoff",
+  "worker",
+  "worker-recovery-preflight",
+  "bridge",
+  "seal",
+  "publish",
+  "verify",
+]);
+
+export const LINEAGE_TRIGGERS: readonly LineageTrigger[] = Object.freeze([
+  "REQUIREMENT_ISSUE",
+  "MANUAL_DISPATCH",
+  "AUTO_REPLAN",
+  "HUMAN_APPROVAL",
+  "REBIND_REQUEST",
+  "UPSTREAM_COMPLETION",
+  "RECOVERY_PREFLIGHT",
+  "EXPLICIT_RECOVERY",
+  "SAME_RUN_CONTINUATION",
+]);
+
+export function isLineageStage(value: unknown): value is LineageStage {
+  return typeof value === "string" && (LINEAGE_STAGES as readonly string[]).includes(value);
+}
+
+export function isLineageTrigger(value: unknown): value is LineageTrigger {
+  return typeof value === "string" && (LINEAGE_TRIGGERS as readonly string[]).includes(value);
+}
 
 export type GitHubEventName = "issues" | "workflow_dispatch" | "issue_comment" | "workflow_run";
 
@@ -127,6 +162,43 @@ export const STAGE_ORDER: readonly LineageStage[] = Object.freeze([
   "publish",
   "verify",
 ]);
+
+/**
+ * StageProvenance chain에 들어갈 수 있는 stage.
+ * LineageRoot가 PLAN/승인/effective base까지 이미 담고 Handoff에서 생성되므로,
+ * chain의 첫 record는 반드시 handoff이고 plan / plan-authorize는 record가 되지 않는다.
+ */
+export const LINEAGE_CHAIN_STAGES: readonly LineageStage[] = Object.freeze([
+  "handoff",
+  "worker",
+  "bridge",
+  "seal",
+  "publish",
+  "verify",
+]);
+
+export const FIRST_CHAIN_STAGE: LineageStage = "handoff";
+
+export function isChainStage(stage: LineageStage): boolean {
+  return LINEAGE_CHAIN_STAGES.includes(stage);
+}
+
+/** 해당 stage의 record에 허용되는 trigger 집합 (pure, STAGE_PRODUCERS에서 파생). */
+export function allowedStageTriggers(stage: LineageStage): readonly LineageTrigger[] {
+  const rules = STAGE_PRODUCERS[stage].rules;
+  if (rules.length === 0) return ["SAME_RUN_CONTINUATION"];
+  return [...new Set(rules.map((rule) => rule.trigger))];
+}
+
+/**
+ * (stage, trigger, producer.workflowPath) 조합이 STAGE_PRODUCERS와 일치하는지 (pure).
+ * 외부 JSON의 값은 TypeScript type을 믿지 않고 이 함수로 runtime 검증한다.
+ */
+export function isAllowedStageProducer(stage: unknown, trigger: unknown, workflowPath: unknown): boolean {
+  if (!isLineageStage(stage) || !isLineageTrigger(trigger) || typeof workflowPath !== "string") return false;
+  if (WORKFLOWS[STAGE_PRODUCERS[stage].workflow].path !== workflowPath) return false;
+  return allowedStageTriggers(stage).includes(trigger);
+}
 
 export function stageIndex(stage: LineageStage): number {
   const index = STAGE_ORDER.indexOf(stage);

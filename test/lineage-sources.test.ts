@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  allowedStageTriggers,
+  FIRST_CHAIN_STAGE,
+  isAllowedStageProducer,
+  isChainStage,
+  isLineageStage,
+  isLineageTrigger,
   isNextStage,
+  LINEAGE_CHAIN_STAGES,
+  LINEAGE_STAGES,
+  LINEAGE_TRIGGERS,
   normalizeTrigger,
   PLAN_TRIGGER_EVENTS,
   STAGE_ORDER,
@@ -77,6 +86,56 @@ test("STAGE_ORDER는 main chain 순서를 고정하고 isNextStage는 인접 관
   assert.equal(isNextStage("worker", "handoff"), false);
   assert.equal(stageIndex("seal"), 5);
   assert.throws(() => stageIndex("worker-recovery-preflight"), /not part of the main lineage chain/);
+});
+
+test("runtime vocabulary: isLineageStage / isLineageTrigger는 알려진 값만 허용한다", () => {
+  assert.equal(LINEAGE_STAGES.length, 10);
+  assert.equal(LINEAGE_TRIGGERS.length, 9);
+  assert.deepEqual([...LINEAGE_STAGES].sort(), Object.keys(STAGE_PRODUCERS).sort());
+  for (const stage of LINEAGE_STAGES) assert.equal(isLineageStage(stage), true);
+  for (const trigger of LINEAGE_TRIGGERS) assert.equal(isLineageTrigger(trigger), true);
+  for (const bad of ["", "Handoff", "merge", "workflow_run", null, undefined, 1, {}, ["handoff"]]) {
+    assert.equal(isLineageStage(bad), false, `stage ${JSON.stringify(bad)}`);
+    assert.equal(isLineageTrigger(bad), false, `trigger ${JSON.stringify(bad)}`);
+  }
+  // STAGE_PRODUCERS가 쓰는 trigger는 모두 runtime 집합에 있다.
+  for (const stage of LINEAGE_STAGES) {
+    for (const rule of STAGE_PRODUCERS[stage].rules) assert.equal(isLineageTrigger(rule.trigger), true);
+  }
+});
+
+test("chain stage: root가 PLAN/승인/base를 담으므로 chain은 handoff에서 시작한다", () => {
+  assert.deepEqual([...LINEAGE_CHAIN_STAGES], ["handoff", "worker", "bridge", "seal", "publish", "verify"]);
+  assert.equal(FIRST_CHAIN_STAGE, "handoff");
+  assert.equal(isChainStage("plan"), false);
+  assert.equal(isChainStage("plan-authorize"), false);
+  assert.equal(isChainStage("plan-recovery"), false);
+  assert.equal(isChainStage("worker-recovery-preflight"), false);
+  assert.equal(isChainStage("bridge"), true);
+});
+
+test("isAllowedStageProducer: stage + trigger + workflowPath 조합이 STAGE_PRODUCERS와 일치해야 한다", () => {
+  assert.deepEqual([...allowedStageTriggers("handoff")], ["UPSTREAM_COMPLETION", "REBIND_REQUEST"]);
+  assert.deepEqual([...allowedStageTriggers("worker")], ["UPSTREAM_COMPLETION", "RECOVERY_PREFLIGHT"]);
+  assert.deepEqual([...allowedStageTriggers("publish")], ["SAME_RUN_CONTINUATION"]);
+
+  assert.equal(isAllowedStageProducer("handoff", "REBIND_REQUEST", WORKFLOWS.planImplementHandoff.path), true);
+  assert.equal(isAllowedStageProducer("worker", "RECOVERY_PREFLIGHT", WORKFLOWS.planImplementWorker.path), true);
+  assert.equal(isAllowedStageProducer("bridge", "EXPLICIT_RECOVERY", WORKFLOWS.planCandidateBridge.path), true);
+  assert.equal(isAllowedStageProducer("seal", "UPSTREAM_COMPLETION", WORKFLOWS.trustedRail.path), true);
+  assert.equal(isAllowedStageProducer("verify", "SAME_RUN_CONTINUATION", WORKFLOWS.trustedRail.path), true);
+
+  // 잘못된 trigger
+  assert.equal(isAllowedStageProducer("worker", "REBIND_REQUEST", WORKFLOWS.planImplementWorker.path), false);
+  assert.equal(isAllowedStageProducer("handoff", "EXPLICIT_RECOVERY", WORKFLOWS.planImplementHandoff.path), false);
+  assert.equal(isAllowedStageProducer("seal", "SAME_RUN_CONTINUATION", WORKFLOWS.trustedRail.path), false);
+  // 잘못된 workflowPath
+  assert.equal(isAllowedStageProducer("handoff", "UPSTREAM_COMPLETION", WORKFLOWS.planImplementWorker.path), false);
+  assert.equal(isAllowedStageProducer("bridge", "UPSTREAM_COMPLETION", ".github/workflows/evil.yml"), false);
+  // 알 수 없는 값 / type 우회
+  assert.equal(isAllowedStageProducer("merge", "UPSTREAM_COMPLETION", WORKFLOWS.trustedRail.path), false);
+  assert.equal(isAllowedStageProducer("handoff", "workflow_run", WORKFLOWS.planImplementHandoff.path), false);
+  assert.equal(isAllowedStageProducer("handoff", "UPSTREAM_COMPLETION", undefined), false);
 });
 
 test("PLAN_TRIGGER_EVENTS는 plan-authorize/handoff handler가 현재 허용하는 집합과 동일하다 (parity)", () => {

@@ -18,7 +18,16 @@
 import { createHash } from "node:crypto";
 import { GIT_SHA, SHA256 } from "./constants.js";
 import type { EffectiveBaseKind } from "./base.js";
-import { isNextStage, type LineageStage, type LineageTrigger } from "./sources.js";
+import {
+  FIRST_CHAIN_STAGE,
+  isAllowedStageProducer,
+  isChainStage,
+  isLineageStage,
+  isLineageTrigger,
+  isNextStage,
+  type LineageStage,
+  type LineageTrigger,
+} from "./sources.js";
 
 export interface ArtifactRef {
   readonly name: string;
@@ -232,7 +241,7 @@ export interface CreateStageProvenanceInput {
 
 export function createStageProvenance(input: CreateStageProvenanceInput): StageProvenance {
   const root = verifyLineageRoot(input.root);
-  const parent = input.parent === undefined ? undefined : verifyStageProvenance(input.parent, { root });
+  const parent = input.parent === undefined ? undefined : verifyParentStage(input.parent, root);
   const payload = stagePayload({
     schemaVersion: 1,
     kind: "execution-lineage-stage",
@@ -247,10 +256,56 @@ export function createStageProvenance(input: CreateStageProvenanceInput): StageP
   return { ...payload, digestAlgorithm: "sha256", lineageDigest: lineageDigestOf(payload) };
 }
 
+/**
+ * 기대값으로 넘겨받은 parent record 자체를 검증한다 (fail-closed).
+ * parent의 parent는 여기서 알 수 없으므로 chain 위치 전체를 증명하지는 않지만,
+ *  - schema / vocabulary / producer 조합 / subject 형식
+ *  - 같은 root 소속
+ *  - digest 자기 일관성
+ *  - handoff면 parent=rootDigest, handoff가 아니면 parent≠rootDigest
+ * 를 확인한다. 전체 경로 증명은 verifyLineageChain이 담당한다.
+ */
+function verifyParentStage(value: unknown, root: LineageRoot): StageProvenance {
+  if (!record(value) || value.schemaVersion !== 1 || value.kind !== "execution-lineage-stage" || value.digestAlgorithm !== "sha256") {
+    throw new Error("unsupported parent lineage stage schema");
+  }
+  if (!record(value.producer) || !record(value.subject) || !record(value.subject.digests)) {
+    throw new Error("parent lineage stage producer/subject shape is invalid");
+  }
+  assertDigest("parent stage lineageDigest", value.lineageDigest);
+  const parent = value as unknown as StageProvenance;
+  if (parent.rootDigest !== root.rootDigest) throw new Error("stage does not belong to the given lineage root");
+  const payload = stagePayload(parent);
+  verifyStageShape(payload);
+  const isFirst = payload.stage === FIRST_CHAIN_STAGE;
+  if (isFirst !== (payload.parentLineageDigest === payload.rootDigest)) {
+    throw new Error("parent lineage stage position is inconsistent with its parent digest");
+  }
+  if (lineageDigestOf(payload) !== parent.lineageDigest) throw new Error("parent lineage stage digest mismatch");
+  return parent;
+}
+
 function verifyStagePayload(value: StageProvenancePayload, parent: StageProvenance | undefined): void {
+  verifyStageShape(value);
+  verifyStagePosition(value, parent);
+}
+
+function verifyStageShape(value: StageProvenancePayload): void {
+  // 외부 JSON일 수 있으므로 TypeScript type을 믿지 않고 runtime에서 vocabulary를 검증한다.
+  // digest를 다시 계산해 맞춘 record라도 여기서 거부된다.
+  if (!isLineageStage(value.stage)) throw new Error(`stage is not a known LineageStage: ${String(value.stage)}`);
+  if (!isChainStage(value.stage)) throw new Error(`stage cannot appear in a lineage chain: ${value.stage}`);
+  if (!isLineageTrigger(value.trigger)) throw new Error(`trigger is not a known LineageTrigger: ${String(value.trigger)}`);
+  if (!record(value.producer)) throw new Error("stage producer must be an object");
+  if (!record(value.subject)) throw new Error("stage subject must be an object");
+  assertNonempty("stage producer.workflowPath", value.producer.workflowPath);
+  if (!isAllowedStageProducer(value.stage, value.trigger, value.producer.workflowPath)) {
+    throw new Error(
+      `stage/trigger/producer combination is not allowed: ${value.stage} ${value.trigger} ${value.producer.workflowPath}`,
+    );
+  }
   assertDigest("stage rootDigest", value.rootDigest);
   assertDigest("stage parentLineageDigest", value.parentLineageDigest);
-  assertNonempty("stage producer.workflowPath", value.producer.workflowPath);
   positiveInteger("stage producer.runId", value.producer.runId);
   positiveInteger("stage producer.runAttempt", value.producer.runAttempt);
   assertSha("stage producer.controlPlaneSha", value.producer.controlPlaneSha);
@@ -260,14 +315,24 @@ function verifyStagePayload(value: StageProvenancePayload, parent: StageProvenan
     assertNonempty("stage subject.digests key", key);
     assertDigest(`stage subject.digests.${key}`, digest);
   }
+}
+
+function verifyStagePosition(value: StageProvenancePayload, parent: StageProvenance | undefined): void {
   if (parent !== undefined) {
     if (parent.rootDigest !== value.rootDigest) throw new Error("stage root digest differs from parent root digest");
     if (parent.lineageDigest !== value.parentLineageDigest) throw new Error("stage parent digest mismatch");
     if (!isNextStage(parent.stage, value.stage)) {
       throw new Error(`stage order violation: ${parent.stage} -> ${value.stage}`);
     }
-  } else if (value.parentLineageDigest !== value.rootDigest) {
-    throw new Error("first stage must reference the root digest as parent");
+  } else {
+    // LineageRoot는 PLAN/승인/effective base를 이미 담고 Handoff에서 생성된다.
+    // 따라서 chain의 첫 record는 handoff만 허용한다 (worker/bridge로 시작하는 chain은 malformed).
+    if (value.stage !== FIRST_CHAIN_STAGE) {
+      throw new Error(`first lineage stage must be ${FIRST_CHAIN_STAGE}, got ${value.stage}`);
+    }
+    if (value.parentLineageDigest !== value.rootDigest) {
+      throw new Error("first stage must reference the root digest as parent");
+    }
   }
 }
 
@@ -279,11 +344,15 @@ export function verifyStageProvenance(
     throw new Error("unsupported lineage stage schema");
   }
   assertDigest("stage lineageDigest", value.lineageDigest);
+  if (!record(value.producer) || !record(value.subject) || !record(value.subject.digests)) {
+    throw new Error("lineage stage producer/subject shape is invalid");
+  }
   const stage = value as unknown as StageProvenance;
   const root = verifyLineageRoot(expected.root);
   if (stage.rootDigest !== root.rootDigest) throw new Error("stage does not belong to the given lineage root");
+  const parent = expected.parent === undefined ? undefined : verifyParentStage(expected.parent, root);
   const payload = stagePayload(stage);
-  verifyStagePayload(payload, expected.parent);
+  verifyStagePayload(payload, parent);
   if (canonicalJson({ ...payload, digestAlgorithm: "sha256", lineageDigest: stage.lineageDigest }) !== canonicalJson(stage)) {
     throw new Error("lineage stage has unexpected fields");
   }

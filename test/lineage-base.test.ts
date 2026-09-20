@@ -120,8 +120,10 @@ test("effectiveBase는 기존 contract/handoff/bundle이 각자 계산한 baseSh
   assert.equal(base.approvedSha, approved.targetSha);
 });
 
-test("controlPlaneRelation은 base와 control-plane SHA 관계를 이름으로 돌려준다", () => {
+test("controlPlaneRelation은 SHA 비교로 알 수 있는 사실만 말한다 (ancestry는 판정하지 않는다)", () => {
   assert.equal(controlPlaneRelation(targetSha, targetSha), "SAME_AS_BASE");
-  assert.equal(controlPlaneRelation(targetSha, reboundTargetSha), "AHEAD_OF_BASE");
+  assert.equal(controlPlaneRelation(targetSha, reboundTargetSha), "DIFFERENT_FROM_BASE");
+  // 방향을 바꿔도 같은 사실만 돌려준다: ahead/behind/diverged는 compare 결과 없이는 알 수 없다.
+  assert.equal(controlPlaneRelation(reboundTargetSha, targetSha), "DIFFERENT_FROM_BASE");
   assert.throws(() => controlPlaneRelation(targetSha, "x"), /control-plane SHA/);
 });

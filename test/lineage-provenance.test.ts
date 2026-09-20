@@ -184,3 +184,135 @@ test("stage: subject.digests 값과 producer 필드는 형식 검증된다", () 
     /producer\.runId/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// runtime fail-closed: 외부 JSON은 TypeScript type을 믿지 않는다
+// ---------------------------------------------------------------------------
+
+/** 공격자가 필드를 바꾼 뒤 digest까지 다시 계산해 맞춘 record를 만든다. */
+function forge(stage: StageProvenance, patch: Record<string, unknown>): Record<string, unknown> {
+  const { digestAlgorithm: _algorithm, lineageDigest: _digest, ...payload } = { ...stage, ...patch } as Record<string, unknown>;
+  return { ...payload, digestAlgorithm: "sha256", lineageDigest: lineageDigestOf(payload) };
+}
+
+test("forge helper 자체는 유효한 record를 그대로 재현한다 (테스트 전제 확인)", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  assert.deepEqual(forge(handoff, {}), handoff);
+  assert.doesNotThrow(() => verifyStageProvenance(forge(handoff, {}), { root: r }));
+});
+
+test("stage: 알 수 없는 stage/trigger는 digest를 다시 계산해도 거부된다", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  assert.throws(() => verifyStageProvenance(forge(handoff, { stage: "merge" }), { root: r }), /not a known LineageStage/);
+  assert.throws(() => verifyStageProvenance(forge(handoff, { stage: 7 }), { root: r }), /not a known LineageStage/);
+  assert.throws(() => verifyStageProvenance(forge(handoff, { trigger: "workflow_run" }), { root: r }), /not a known LineageTrigger/);
+  assert.throws(() => verifyStageProvenance(forge(handoff, { trigger: null }), { root: r }), /not a known LineageTrigger/);
+  // chain에 들어올 수 없는 stage (root가 이미 담고 있는 plan / plan-authorize, 옆길 workflow)
+  for (const stage of ["plan", "plan-authorize", "plan-recovery", "worker-recovery-preflight"]) {
+    assert.throws(() => verifyStageProvenance(forge(handoff, { stage }), { root: r }), /cannot appear in a lineage chain/, stage);
+  }
+});
+
+test("stage: stage + trigger + producer.workflowPath 조합이 STAGE_PRODUCERS와 다르면 digest를 다시 계산해도 거부된다", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  const combination = /stage\/trigger\/producer combination is not allowed/;
+  // handoff에 허용되지 않는 trigger
+  assert.throws(() => verifyStageProvenance(forge(handoff, { trigger: "EXPLICIT_RECOVERY" }), { root: r }), combination);
+  assert.throws(() => verifyStageProvenance(forge(handoff, { trigger: "SAME_RUN_CONTINUATION" }), { root: r }), combination);
+  // handoff인데 다른 workflow가 발행했다고 주장
+  assert.throws(
+    () => verifyStageProvenance(forge(handoff, { producer: { ...handoff.producer, workflowPath: WORKFLOWS.planImplementWorker.path } }), { root: r }),
+    combination,
+  );
+  assert.throws(
+    () => verifyStageProvenance(forge(handoff, { producer: { ...handoff.producer, workflowPath: ".github/workflows/evil.yml" } }), { root: r }),
+    combination,
+  );
+  // create 경로도 같은 검증을 거친다 (type을 우회한 호출)
+  assert.throws(
+    () => createStageProvenance({ root: r, stage: "handoff", trigger: "RECOVERY_PREFLIGHT", producer: handoff.producer, subject: { digests: {} } }),
+    combination,
+  );
+  assert.throws(
+    () => createStageProvenance({ root: r, stage: "handoff", trigger: "issue_comment" as never, producer: handoff.producer, subject: { digests: {} } }),
+    /not a known LineageTrigger/,
+  );
+  // 허용된 다른 조합은 통과한다
+  assert.doesNotThrow(() => verifyStageProvenance(forge(handoff, { trigger: "REBIND_REQUEST" }), { root: r }));
+});
+
+test("stage: producer/subject shape가 깨진 외부 JSON은 fail-closed", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  assert.throws(() => verifyStageProvenance({ ...handoff, producer: null }, { root: r }), /producer\/subject shape is invalid/);
+  assert.throws(() => verifyStageProvenance({ ...handoff, subject: { digests: [] } }, { root: r }), /producer\/subject shape is invalid/);
+  assert.throws(() => verifyStageProvenance({ ...handoff, subject: undefined }, { root: r }), /producer\/subject shape is invalid/);
+});
+
+test("chain 시작점: 첫 StageProvenance는 handoff만 허용한다", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  const first = /first lineage stage must be handoff/;
+
+  // create: parent 없이 worker/bridge/seal/verify로 시작할 수 없다
+  const starts: Array<[StageProvenance["stage"], StageProvenance["trigger"], string]> = [
+    ["worker", "UPSTREAM_COMPLETION", WORKFLOWS.planImplementWorker.path],
+    ["bridge", "UPSTREAM_COMPLETION", WORKFLOWS.planCandidateBridge.path],
+    ["bridge", "EXPLICIT_RECOVERY", WORKFLOWS.planCandidateBridge.path],
+    ["seal", "UPSTREAM_COMPLETION", WORKFLOWS.trustedRail.path],
+    ["verify", "SAME_RUN_CONTINUATION", WORKFLOWS.trustedRail.path],
+  ];
+  for (const [stage, trigger, workflowPath] of starts) {
+    assert.throws(
+      () => createStageProvenance({ root: r, stage, trigger, producer: { workflowPath, runId: 1, runAttempt: 1, controlPlaneSha: targetSha }, subject: { digests: {} } }),
+      first,
+      `${stage}/${trigger}`,
+    );
+  }
+
+  // verify: parent=rootDigest로 맞추고 digest까지 다시 계산한 worker/bridge record도 거부된다
+  const forgedWorker = forge(handoff, { stage: "worker", producer: { ...handoff.producer, workflowPath: WORKFLOWS.planImplementWorker.path } });
+  const forgedBridge = forge(handoff, { stage: "bridge", producer: { ...handoff.producer, workflowPath: WORKFLOWS.planCandidateBridge.path } });
+  assert.throws(() => verifyStageProvenance(forgedWorker, { root: r }), first);
+  assert.throws(() => verifyStageProvenance(forgedBridge, { root: r }), first);
+  assert.throws(() => verifyLineageChain(r, [forgedWorker]), first);
+  assert.throws(() => verifyLineageChain(r, [forgedBridge]), first);
+
+  // 정상 chain은 handoff에서 시작한다
+  assert.doesNotThrow(() => verifyLineageChain(r, []));
+  assert.doesNotThrow(() => verifyLineageChain(r, [handoff]));
+});
+
+test("chain: 변조된 parent를 기대값으로 넘겨도 parent digest 자체 검증에서 거부된다", () => {
+  const r = root();
+  const handoff = handoffStage(r);
+  const worker = createStageProvenance({
+    root: r,
+    parent: handoff,
+    stage: "worker",
+    trigger: "UPSTREAM_COMPLETION",
+    producer: { workflowPath: WORKFLOWS.planImplementWorker.path, runId: 200, runAttempt: 1, controlPlaneSha: targetSha },
+    subject: { digests: { candidateDigest: "5".repeat(64) } },
+  });
+  const tamperedParent = { ...handoff, producer: { ...handoff.producer, runId: 999 } };
+  assert.throws(() => verifyStageProvenance(worker, { root: r, parent: tamperedParent }), /parent lineage stage digest mismatch/);
+});
+
+test("Rail 내부 stage는 SAME_RUN_CONTINUATION으로 handoff → verify 전체 chain을 이룬다", () => {
+  const r = root();
+  const producer = (workflowPath: string, runId: number) => ({ workflowPath, runId, runAttempt: 1, controlPlaneSha: targetSha });
+  const handoff = handoffStage(r);
+  const worker = createStageProvenance({ root: r, parent: handoff, stage: "worker", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.planImplementWorker.path, 2), subject: { digests: {} } });
+  const bridge = createStageProvenance({ root: r, parent: worker, stage: "bridge", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.planCandidateBridge.path, 3), subject: { digests: {} } });
+  const seal = createStageProvenance({ root: r, parent: bridge, stage: "seal", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.trustedRail.path, 4), subject: { digests: {} } });
+  const publish = createStageProvenance({ root: r, parent: seal, stage: "publish", trigger: "SAME_RUN_CONTINUATION", producer: producer(WORKFLOWS.trustedRail.path, 4), subject: { digests: {} } });
+  const verify = createStageProvenance({ root: r, parent: publish, stage: "verify", trigger: "SAME_RUN_CONTINUATION", producer: producer(WORKFLOWS.trustedRail.path, 4), subject: { digests: {} } });
+  assert.deepEqual(
+    verifyLineageChain(r, [handoff, worker, bridge, seal, publish, verify]).stages.map((s) => s.stage),
+    ["handoff", "worker", "bridge", "seal", "publish", "verify"],
+  );
+  assert.throws(() => verifyLineageChain(r, [handoff, worker, seal]), /parent digest mismatch/);
+});

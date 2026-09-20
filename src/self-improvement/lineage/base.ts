@@ -56,14 +56,17 @@ export function effectiveBase(approved: ApprovedTargetLike, rebind?: RebindLike)
 }
 
 /**
- * control-plane 코드 SHA와 base SHA의 관계.
+ * control-plane 코드 SHA와 base SHA의 관계 — SHA 두 개만 보고 말할 수 있는 사실만 표현한다.
  * 현재 코드는 "recovery guard가 없으면 둘이 같아야 한다"를 여러 곳에서 가정한다.
- * 이 함수는 그 가정을 이름 있는 판정으로 만든다 (판정 자체는 기존과 동일).
+ *
+ * 주의: 두 SHA가 다르다는 것만으로는 control-plane이 base의 후손(ahead)인지 알 수 없다.
+ * ancestry(AHEAD / DIVERGED / BEHIND) 판정은 GitHub compare 결과(status, merge_base)를
+ * 입력으로 받는 별도 검증이 담당해야 하며, 이 pure function의 범위가 아니다.
  */
-export type ControlPlaneRelation = "SAME_AS_BASE" | "AHEAD_OF_BASE";
+export type ControlPlaneRelation = "SAME_AS_BASE" | "DIFFERENT_FROM_BASE";
 
 export function controlPlaneRelation(baseSha: string, controlPlaneSha: string): ControlPlaneRelation {
   assertSha("base SHA", baseSha);
   assertSha("control-plane SHA", controlPlaneSha);
-  return baseSha === controlPlaneSha ? "SAME_AS_BASE" : "AHEAD_OF_BASE";
+  return baseSha === controlPlaneSha ? "SAME_AS_BASE" : "DIFFERENT_FROM_BASE";
 }
