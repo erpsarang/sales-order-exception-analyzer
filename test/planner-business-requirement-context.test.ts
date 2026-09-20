@@ -401,3 +401,47 @@ test("business augmentation은 npm run으로 선택된 CLI source/direct test/pa
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("브라우저 Web 신규 기능 PLAN은 package.json과 tsconfig.json을 최종 Context Pack에 보존한다", () => {
+  const root = mkdtempSync(join(tmpdir(), "planner-web-bootstrap-context-"));
+  try {
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "test"));
+
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ type: "module", scripts: { test: "node --test" }, devDependencies: { typescript: "1.0.0" } }),
+    );
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { module: "NodeNext", target: "ES2022" }, include: ["src", "test"] }),
+    );
+    writeFileSync(
+      join(root, "src", "order-analysis.ts"),
+      "export function analyzeOrders() { return '주문 CSV 분석 결과'; }\n",
+    );
+    writeFileSync(
+      join(root, "test", "order-analysis.test.ts"),
+      [
+        "import { analyzeOrders } from '../src/order-analysis.js';",
+        "const browserCsvRequirement = '브라우저에서 주문 CSV 파일을 올리고 분석 결과를 확인한다.';",
+        "void analyzeOrders; void browserCsvRequirement;",
+        "",
+      ].join("\n"),
+    );
+
+    const requirement = "브라우저에서 주문 CSV 파일을 올리고 분석 결과를 확인하고 싶다.";
+    const options = { maxFiles: 4, maxBytes: 16_000, maxFileBytes: 4_000 };
+    const selected = selectPlanContext(requirement, root, "example/orders", "e".repeat(40), options);
+    const selectedPaths = selected.files.map((file) => file.path);
+    assert.ok(selectedPaths.includes("package.json"), `missing package.json: ${selectedPaths.join(", ")}`);
+    assert.ok(selectedPaths.includes("tsconfig.json"), `missing tsconfig.json: ${selectedPaths.join(", ")}`);
+
+    const augmented = augmentPlanContextWithBusinessRelations(requirement, root, selected, options);
+    const paths = augmented.files.map((file) => file.path);
+    assert.ok(paths.includes("package.json"), `package.json was evicted: ${paths.join(", ")}`);
+    assert.ok(paths.includes("tsconfig.json"), `tsconfig.json was evicted: ${paths.join(", ")}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
