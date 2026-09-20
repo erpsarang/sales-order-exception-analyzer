@@ -1,0 +1,29 @@
+:root { font-family: Inter, system-ui, sans-serif; color: #172033; background: #f4f7fb; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.app-shell { max-width: 1080px; margin: 0 auto; padding: 48px 24px; }
+header { margin-bottom: 28px; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 10px; font-size: clamp(2rem, 5vw, 3rem); }
+.eyebrow { color: #2563eb; font-size: .8rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.upload-panel, .summary-grid article, .table-wrap { background: #fff; border: 1px solid #dbe3f0; border-radius: 12px; }
+.upload-panel { padding: 24px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.upload-panel h2 { width: 100%; margin-bottom: 0; }
+input[type=file] { max-width: 100%; }
+button { border: 0; border-radius: 7px; padding: 10px 16px; background: #2563eb; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+button:disabled { opacity: .6; cursor: wait; }
+.hint { width: 100%; margin: 0; color: #526075; font-size: .9rem; }
+.error { margin: 20px 0; padding: 14px; border-radius: 8px; color: #991b1b; background: #fef2f2; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 28px 0; }
+.summary-grid article { padding: 18px; }
+.summary-grid span, .summary-grid small { color: #526075; }
+.summary-grid strong { margin: 0 5px; font-size: 2rem; }
+.exception-summary strong { color: #dc2626; }
+.result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.result-heading h2, .result-heading p { margin-bottom: 0; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 850px; }
+th, td { padding: 12px 14px; border-bottom: 1px solid #e5eaf2; text-align: left; vertical-align: top; }
+th { background: #f8fafc; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+@media (max-width: 600px) { .app-shell { padding: 28px 16px; } .summary-grid { gap: 8px; } .summary-grid article { padding: 12px; } .summary-grid strong { display: block; margin: 3px 0; } .result-heading { align-items: flex-start; flex-direction: column; } }
