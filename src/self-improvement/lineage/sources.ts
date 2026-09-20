@@ -6,8 +6,9 @@
  *
  * Step 1A에서는 vocabulary와 정규화 pure function만 추가한다.
  * STAGE_PRODUCERS 표는 "현재 코드가 실제로 허용하는 조합"을 그대로 옮긴 것이며,
- * 아직 남아 있는 stage 간 불일치(P2)도 그대로 기록한다. 통합은 후속 단계에서 한다.
- * (P1: plan-recovery의 PLAN source event 불일치는 Step 1B-1에서 PLAN_TRIGGER_EVENTS로 통합됨)
+ * 발견된 stage 간 불일치는 단계적으로 canonical 집합으로 통합한다.
+ * (P1: plan-recovery의 PLAN source event → Step 1B-1에서 PLAN_TRIGGER_EVENTS로 통합)
+ * (P2: recovery preflight의 Handoff source event → Step 1B-2에서 HANDOFF_SOURCE_EVENTS로 통합)
  */
 import { WORKFLOWS, type WorkflowKey } from "./constants.js";
 
@@ -241,6 +242,15 @@ export function normalizeTrigger(event: RawSourceEvent): LineageTrigger {
 export const PLAN_TRIGGER_EVENTS: readonly GitHubEventName[] = Object.freeze(["workflow_dispatch", "issues"]);
 
 /**
+ * 정상 Handoff run이 가질 수 있는 GitHub event의 canonical 집합 (단일 진실).
+ *  - workflow_run: PLAN_AUTHORIZE 완료로 시작된 Handoff
+ *  - issue_comment: `PLAN-재개` rebind로 시작된 Handoff
+ * Worker / Candidate Bridge / Worker Recovery Preflight workflow가 모두 이 집합만 허용한다 (Step 1B-2).
+ * event 허용 집합만 뜻하며, name/path/status/conclusion/runAttempt/branch/SHA/artifact 검증은 각 consumer가 그대로 수행한다.
+ */
+export const HANDOFF_SOURCE_EVENTS: readonly GitHubEventName[] = Object.freeze(["workflow_run", "issue_comment"]);
+
+/**
  * 어떤 stage가 "상류 run의 event"로 무엇을 받아들이는지에 대한 현재 코드의 사실.
  * key = 검사하는 쪽, value = 상류 run에 허용된 GitHub event.
  *
@@ -249,8 +259,11 @@ export const PLAN_TRIGGER_EVENTS: readonly GitHubEventName[] = Object.freeze(["w
  *    (값을 복제하지 않는다. P1은 Step 1B-1에서 해소됨).
  *  - authorize/handoff handler는 아직 자기 파일에 리터럴을 갖고 있어 그 사실을 데이터로 적고,
  *    PLAN_TRIGGER_EVENTS 및 handler 소스와의 parity를 테스트로 고정한다.
- * 아직 남아 있는 불일치:
- *  - Handoff run: worker/bridge는 [workflow_run, issue_comment], preflight는 [workflow_run]만 (P2)
+ * Handoff run:
+ *  - worker / bridge / recovery preflight workflow는 모두 HANDOFF_SOURCE_EVENTS와 같은 집합을 허용하므로
+ *    같은 객체를 참조한다 (값을 복제하지 않는다. P2는 Step 1B-2에서 해소됨).
+ *    workflow YAML은 TS 상수를 import할 수 없으므로 YAML 리터럴과의 parity는 테스트로 고정한다.
+ *  - worker library는 rebind 여부에 따라 더 강한 조건(하나의 event만)을 적용한다. 이는 의도된 규칙이다.
  */
 export const UPSTREAM_EVENT_ACCEPTANCE = Object.freeze({
   planRunAcceptedBy: Object.freeze({
@@ -259,10 +272,10 @@ export const UPSTREAM_EVENT_ACCEPTANCE = Object.freeze({
     planRecoveryClassifier: PLAN_TRIGGER_EVENTS,
   } as const),
   handoffRunAcceptedBy: Object.freeze({
-    planImplementWorkerWorkflow: ["workflow_run", "issue_comment"],
+    planImplementWorkerWorkflow: HANDOFF_SOURCE_EVENTS,
     planImplementWorkerLibrary: Object.freeze({ withRebind: ["issue_comment"], withoutRebind: ["workflow_run"] }),
-    planCandidateBridgeWorkflow: ["workflow_run", "issue_comment"],
-    planWorkerRecoveryPreflightWorkflow: ["workflow_run"],
+    planCandidateBridgeWorkflow: HANDOFF_SOURCE_EVENTS,
+    planWorkerRecoveryPreflightWorkflow: HANDOFF_SOURCE_EVENTS,
   } as const),
   workerRunAcceptedBy: Object.freeze({
     planCandidateBridge: ["workflow_run"],

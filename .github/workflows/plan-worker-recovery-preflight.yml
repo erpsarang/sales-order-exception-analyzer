@@ -172,7 +172,7 @@ jobs:
             if (
               handoff.name !== 'Trusted PLAN IMPLEMENT Handoff' ||
               handoff.path !== '.github/workflows/plan-implement-handoff.yml' ||
-              handoff.event !== 'workflow_run' ||
+              !['workflow_run', 'issue_comment'].includes(handoff.event) ||
               handoff.status !== 'completed' ||
               handoff.conclusion !== 'success' ||
               handoff.run_attempt !== source.handoffRunAttempt ||
