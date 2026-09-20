@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -373,6 +374,29 @@ test("business augmentation은 npm run으로 선택된 CLI source/direct test/pa
     assert.ok(paths.includes("test/batch-order-analysis.test.ts"), `business direct test was not added: ${paths.join(", ")}`);
     assert.ok(paths.length <= 6);
     assert.ok(augmented.totalBytes <= 14_000);
+
+    const withoutDirectTestFiles = selected.files
+      .filter((file) => file.path !== "test/order-analysis-cli.test.ts")
+      .map((file, index) => ({ ...file, evidenceId: `E${index + 1}` }));
+    const withoutDirectTestPayload = {
+      schemaVersion: selected.schemaVersion,
+      kind: selected.kind,
+      repository: selected.repository,
+      sha: selected.sha,
+      files: withoutDirectTestFiles,
+      totalBytes: withoutDirectTestFiles.reduce((sum, file) => sum + file.byteLength, 0),
+    };
+    const withoutDirectTest = {
+      ...withoutDirectTestPayload,
+      digestAlgorithm: "sha256" as const,
+      contextDigest: createHash("sha256").update(JSON.stringify(withoutDirectTestPayload), "utf8").digest("hex"),
+    };
+    const recovered = augmentPlanContextWithBusinessRelations(requirement, root, withoutDirectTest, options);
+    const recoveredPaths = recovered.files.map((file) => file.path);
+    assert.ok(recoveredPaths.includes("src/order-analysis-cli.ts"), `CLI source missing after recovery: ${recoveredPaths.join(", ")}`);
+    assert.ok(recoveredPaths.includes("test/order-analysis-cli.test.ts"), `CLI direct test was not recovered: ${recoveredPaths.join(", ")}`);
+    assert.ok(recoveredPaths.includes("package.json"), `package contract missing after recovery: ${recoveredPaths.join(", ")}`);
+    assert.ok(recovered.totalBytes <= 14_000);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
