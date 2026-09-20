@@ -23,7 +23,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ImplementContextPack } from "./context-pack.js";
+import type { ImplementContract } from "./implement-contract.js";
 import {
+  createCandidateChangeSet,
   TRUSTED_LOCKFILE_MAX_BYTES,
   TRUSTED_LOCKFILE_PATH,
   type WorkerChangeProposal,
@@ -225,6 +227,7 @@ export function generateTrustedLockfile(
  *  - package.json을 바꾸면 trusted lock을 생성해 change로 추가한다(base와 같으면 추가하지 않음).
  */
 export function applyTrustedLockfile(
+  contract: ImplementContract,
   context: ImplementContextPack,
   proposal: WorkerProposal,
   executor: NpmLockExecutor = defaultExecutor,
@@ -233,12 +236,23 @@ export function applyTrustedLockfile(
   const changes = proposal.changes as readonly WorkerChangeProposal[];
   const kept = changes.filter((change) => change?.path !== TRUSTED_LOCKFILE_PATH);
   const droppedUntrustedLockfile = kept.length !== changes.length;
-  const manifestChanges = kept.filter((change) => change?.path === TRUSTED_MANIFEST_PATH);
+
+  // Pre-validation: AI가 제안한 lock을 제거한 untrusted proposal이 기존 candidate 계약을 통과해야만
+  // trusted npm을 실행한다. 기존 createCandidateChangeSet()을 그대로 재사용하므로
+  // allowedPaths(Context Pack membership) / operation / exact baseContentDigest / no-op /
+  // duplicate path / maxFilesChanged / untrusted maxPatchBytes 규칙이 한 글자도 다르지 않다.
+  // (여기서 만든 candidate는 버린다. 최종 candidate는 호출자가 lock을 결합한 proposal로 다시 만든다.)
+  createCandidateChangeSet(contract, context, { summary: proposal.summary, changes: kept });
+
+  const manifestChanges = kept.filter((change) => change.path === TRUSTED_MANIFEST_PATH);
   if (manifestChanges.length === 0) {
     return { proposal: { summary: proposal.summary, changes: kept }, status: "NOT_NEEDED", droppedUntrustedLockfile };
   }
-  if (manifestChanges.length !== 1) throw new Error("worker proposal changes package.json more than once");
   const manifestChange = manifestChanges[0]!;
+  // trusted lock change가 들어갈 자리가 maxFilesChanged 안에 있어야 한다 (npm 실행 전에 확인).
+  if (kept.length + 1 > contract.scope.maxFilesChanged) {
+    throw new Error("worker proposal leaves no room for the trusted package-lock.json within maxFilesChanged");
+  }
   if (typeof manifestChange.content !== "string") throw new Error("package.json change content must be a string");
 
   const lockContext = context.files.find((file) => file.path === TRUSTED_LOCKFILE_PATH);

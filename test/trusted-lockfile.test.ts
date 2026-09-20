@@ -68,7 +68,7 @@ function fakeNpm(calls: Call[], produce: (manifestText: string) => string | null
   };
 }
 
-function fixture(options: { lockPresent?: boolean; lockInScope?: boolean; maxPatchBytes?: number } = {}) {
+function fixture(options: { lockPresent?: boolean; lockInScope?: boolean; maxPatchBytes?: number; maxFilesChanged?: number } = {}) {
   const { lockPresent = true, lockInScope = true, maxPatchBytes = 2_000 } = options;
   const allowedPaths = ["package.json", "src/web-main.ts", ...(lockInScope ? ["package-lock.json"] : [])];
   const contract = createImplementContract({
@@ -86,7 +86,7 @@ function fixture(options: { lockPresent?: boolean; lockInScope?: boolean; maxPat
     requiredChanges: ["웹 entry 추가"],
     forbiddenChanges: [],
     validationCommands: ["npm test"],
-    maxFilesChanged: allowedPaths.length,
+    maxFilesChanged: options.maxFilesChanged ?? allowedPaths.length,
     maxContextBytes: 80_000,
     maxPatchBytes,
   });
@@ -113,7 +113,7 @@ test("package.json을 바꾸지 않으면 npm을 실행하지 않고, AI가 제�
       summary: "web",
       changes: [f.sourceChange, { path: "package-lock.json", operation: "modify", baseContentDigest: f.file("package-lock.json").contentDigest, content: "{\"evil\":true}" }],
     };
-    const result = applyTrustedLockfile(f.context, proposal, fakeNpm(calls));
+    const result = applyTrustedLockfile(f.contract, f.context, proposal, fakeNpm(calls));
     assert.equal(result.status, "NOT_NEEDED");
     assert.equal(result.droppedUntrustedLockfile, true);
     assert.deepEqual(result.proposal.changes, [f.sourceChange]);
@@ -126,7 +126,7 @@ test("package.json에 의존성을 추가하면 trusted step이 lock을 생성�
   try {
     const calls: Call[] = [];
     const aiLock = { path: "package-lock.json", operation: "modify" as const, baseContentDigest: f.file("package-lock.json").contentDigest, content: "AI가 지어낸 lock" };
-    const result = applyTrustedLockfile(f.context, { summary: "web", changes: [f.manifestChange, aiLock, f.sourceChange] }, fakeNpm(calls));
+    const result = applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange, aiLock, f.sourceChange] }, fakeNpm(calls));
     assert.equal(result.status, "GENERATED");
     assert.equal(result.droppedUntrustedLockfile, true);
     assert.deepEqual(result.proposal.changes.map((change) => change.path), ["package.json", "src/web-main.ts", "package-lock.json"]);
@@ -160,7 +160,7 @@ test("npm 실행 환경: 토큰 제거, user/global npmrc 무시, registry 고�
     process.env.npm_config_registry = "https://evil.example/";
     process.env.NPM_CONFIG_USERCONFIG = "/home/runner/.npmrc";
     const calls: Call[] = [];
-    applyTrustedLockfile(f.context, { summary: "web", changes: [f.manifestChange] }, fakeNpm(calls));
+    applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange] }, fakeNpm(calls));
     const env = calls[0]!.env;
     for (const key of ["GITHUB_TOKEN", "GH_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN"]) assert.equal(env[key], "", key);
     assert.equal(env.npm_config_registry, TRUSTED_NPM_REGISTRY);
@@ -177,19 +177,95 @@ test("npm 실행 환경: 토큰 제거, user/global npmrc 무시, registry 고�
   }
 });
 
+test("pre-validation: AI lock을 제거한 untrusted proposal이 기존 candidate 계약을 통과해야만 npm을 실행한다", () => {
+  const f = fixture({ maxPatchBytes: 600 });
+  try {
+    const digest = f.file("package.json").contentDigest;
+    const aiLock = { path: "package-lock.json", operation: "modify" as const, baseContentDigest: f.file("package-lock.json").contentDigest, content: "AI lock" };
+    const rejected: Array<[RegExp, WorkerProposal]> = [
+      // allowedPaths 밖
+      [/outside allowedPaths: src\/evil\.ts/, { summary: "x", changes: [f.manifestChange, { path: "src/evil.ts", operation: "create", baseContentDigest: null, content: "x" }] }],
+      // operation
+      [/present path must use modify: package\.json/, { summary: "x", changes: [{ ...f.manifestChange, operation: "create", baseContentDigest: null }] }],
+      [/missing path must use create: src\/web-main\.ts/, { summary: "x", changes: [f.manifestChange, { ...f.sourceChange, operation: "modify", baseContentDigest: digest }] }],
+      [/unsupported worker operation/, { summary: "x", changes: [{ ...f.manifestChange, operation: "delete" as never }] }],
+      // exact baseContentDigest
+      [/base content digest mismatch: package\.json/, { summary: "x", changes: [{ ...f.manifestChange, baseContentDigest: "0".repeat(64) }] }],
+      [/new file baseContentDigest must be null/, { summary: "x", changes: [f.manifestChange, { ...f.sourceChange, baseContentDigest: digest }] }],
+      // no-op
+      [/no-op change: package\.json/, { summary: "x", changes: [{ ...f.manifestChange, content: BASE_MANIFEST }] }],
+      // duplicate path
+      [/paths must be unique/, { summary: "x", changes: [f.manifestChange, f.manifestChange] }],
+      // untrusted maxPatchBytes (lock은 아직 없으므로 untrusted 내용만으로 판단된다)
+      [/exceeds maxPatchBytes/, { summary: "x", changes: [f.manifestChange, { ...f.sourceChange, content: "x".repeat(601) }] }],
+      // AI lock을 버리고 나면 남는 변경이 없음
+      [/must contain changes/, { summary: "x", changes: [aiLock] }],
+      // summary
+      [/summary must be non-empty/, { summary: " ", changes: [f.manifestChange] }],
+    ];
+    for (const [expected, proposal] of rejected) {
+      const calls: Call[] = [];
+      assert.throws(() => applyTrustedLockfile(f.contract, f.context, proposal, fakeNpm(calls)), expected, String(expected));
+      assert.equal(calls.length, 0, `npm must not run: ${expected}`);
+    }
+    // AI lock이 섞여 있어도 나머지가 유효하면 통과하고, 그때만 npm이 실행된다.
+    const calls: Call[] = [];
+    const ok = applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange, aiLock, f.sourceChange] }, fakeNpm(calls));
+    assert.equal(ok.status, "GENERATED");
+    assert.equal(calls.length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("pre-validation: maxFilesChanged 초과와 trusted lock 자리 부족은 npm 실행 전에 거부한다", () => {
+  const f = fixture({ maxFilesChanged: 1 });
+  try {
+    const tight = f.contract;
+    // digest를 다시 계산하지 않고 scope만 바꾼 contract는 pre-validation에서 거부된다.
+    assert.throws(
+      () => applyTrustedLockfile({ ...f.contract, scope: { ...f.contract.scope, maxFilesChanged: 2 } }, f.context, { summary: "x", changes: [f.manifestChange] }, fakeNpm([])),
+      /IMPLEMENT contract digest or canonical shape mismatch/,
+    );
+    const calls: Call[] = [];
+    // untrusted 변경만으로 이미 초과
+    assert.throws(() => applyTrustedLockfile(tight, f.context, { summary: "x", changes: [f.manifestChange, f.sourceChange] }, fakeNpm(calls)), /exceeds maxFilesChanged/);
+    // untrusted 변경은 한도 안이지만 trusted lock이 들어갈 자리가 없음
+    assert.throws(() => applyTrustedLockfile(tight, f.context, { summary: "x", changes: [f.manifestChange] }, fakeNpm(calls)), /no room for the trusted package-lock\.json within maxFilesChanged/);
+    assert.equal(calls.length, 0);
+    // package.json을 바꾸지 않으면 lock 자리가 필요 없다.
+    assert.equal(applyTrustedLockfile(tight, f.context, { summary: "x", changes: [f.sourceChange] }, fakeNpm(calls)).status, "NOT_NEEDED");
+    assert.equal(calls.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("최종 proposal은 기존 createCandidateChangeSet()으로 다시 전체 검증되어 candidateDigest를 만든다", () => {
+  const f = fixture();
+  try {
+    const { proposal } = applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] }, fakeNpm([]));
+    const untrustedOnly = createCandidateChangeSet(f.contract, f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] });
+    const final = createCandidateChangeSet(f.contract, f.context, proposal);
+    // pre-validation용 candidate와 최종 candidate는 다르다: 최종 digest는 trusted lock을 포함한다.
+    assert.notEqual(final.candidateDigest, untrustedOnly.candidateDigest);
+    assert.equal(final.changes.length, untrustedOnly.changes.length + 1);
+    assert.doesNotThrow(() => verifyCandidateChangeSet(final, f.contract, f.context));
+    // handler는 lock 결합 뒤에 createCandidateChangeSet을 호출한다.
+    const handler = readFileSync("src/self-improvement/plan-implement-worker-handler.ts", "utf8");
+    assert.ok(handler.includes("const proposal = lockfile.proposal;\n  const candidate = createCandidateChangeSet(bundle.contract, bundle.context, proposal);"));
+  } finally { f.cleanup(); }
+});
+
 test("생성된 lock이 base와 같으면 change를 추가하지 않는다 / lock이 없던 repo는 create로 추가한다", () => {
   const f = fixture();
   try {
     const scriptsOnly = `${JSON.stringify({ ...JSON.parse(BASE_MANIFEST), scripts: { build: "tsc --noEmit", dev: "vite" } }, null, 2)}\n`;
     const change = { ...f.manifestChange, content: scriptsOnly };
-    const result = applyTrustedLockfile(f.context, { summary: "scripts", changes: [change] }, fakeNpm([]));
+    const result = applyTrustedLockfile(f.contract, f.context, { summary: "scripts", changes: [change] }, fakeNpm([]));
     assert.equal(result.status, "UNCHANGED");
     assert.deepEqual(result.proposal.changes, [change]);
   } finally { f.cleanup(); }
 
   const missing = fixture({ lockPresent: false });
   try {
-    const result = applyTrustedLockfile(missing.context, { summary: "web", changes: [missing.manifestChange] }, fakeNpm([]));
+    const result = applyTrustedLockfile(missing.contract, missing.context, { summary: "web", changes: [missing.manifestChange] }, fakeNpm([]));
     assert.equal(result.status, "GENERATED");
     assert.deepEqual(result.proposal.changes[1], { path: "package-lock.json", operation: "create", baseContentDigest: null, content: lockFor(missing.withVite) });
   } finally { missing.cleanup(); }
@@ -197,7 +273,7 @@ test("생성된 lock이 base와 같으면 change를 추가하지 않는다 / loc
   const outOfScope = fixture({ lockInScope: false });
   try {
     assert.throws(
-      () => applyTrustedLockfile(outOfScope.context, { summary: "web", changes: [outOfScope.manifestChange] }, fakeNpm([])),
+      () => applyTrustedLockfile(outOfScope.contract, outOfScope.context, { summary: "web", changes: [outOfScope.manifestChange] }, fakeNpm([])),
       /requires package-lock\.json within the approved allowedPaths/,
     );
   } finally { outOfScope.cleanup(); }
@@ -232,7 +308,7 @@ test("untrusted package.json: registry semver 의존성만 허용하고 나머�
   try {
     const calls: Call[] = [];
     const evil = { ...f.manifestChange, content: manifest({ devDependencies: { vite: "git+https://github.com/evil/x.git" } }) };
-    assert.throws(() => applyTrustedLockfile(f.context, { summary: "evil", changes: [evil] }, fakeNpm(calls)), /registry semver range/);
+    assert.throws(() => applyTrustedLockfile(f.contract, f.context, { summary: "evil", changes: [evil] }, fakeNpm(calls)), /registry semver range/);
     assert.equal(calls.length, 0);
   } finally { f.cleanup(); }
 });
@@ -270,7 +346,7 @@ test("생성된 lockfile 검증: registry/integrity/sync/version/size 위반은 
 test("trusted lock은 일반 candidate change다: candidateDigest에 묶이고, Bridge식 재검증과 exact-base 적용을 통과한다", () => {
   const f = fixture();
   try {
-    const { proposal } = applyTrustedLockfile(f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] }, fakeNpm([]));
+    const { proposal } = applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] }, fakeNpm([]));
     const candidate = createCandidateChangeSet(f.contract, f.context, proposal);
     assert.deepEqual(candidate.changes.map((change) => change.path), ["package-lock.json", "package.json", "src/web-main.ts"]);
     // Candidate Bridge가 하는 것과 같은 재생성 검증
@@ -295,7 +371,7 @@ test("patch budget: trusted lock은 untrusted maxPatchBytes에서 제외되지�
       padding[`node_modules/pad-${i}`] = { version: "1.0.0", resolved: `${TRUSTED_NPM_REGISTRY}pad-${i}/-/pad-${i}-1.0.0.tgz`, integrity: sha512(`pad-${i}`) };
     }
     const bigLock = (manifestText: string) => lockFor(manifestText, padding);
-    const { proposal } = applyTrustedLockfile(f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] }, fakeNpm([], bigLock));
+    const { proposal } = applyTrustedLockfile(f.contract, f.context, { summary: "web", changes: [f.manifestChange, f.sourceChange] }, fakeNpm([], bigLock));
     const lockBytes = Buffer.byteLength(proposal.changes.find((change) => change.path === TRUSTED_LOCKFILE_PATH)!.content, "utf8");
     assert.ok(lockBytes > 20_000, String(lockBytes));
     const candidate = createCandidateChangeSet(f.contract, f.context, proposal);
@@ -315,7 +391,7 @@ test("Worker validate만 trusted lockfile을 결합하고, workflow / Bridge / R
   const validateStart = handler.indexOf("async function validate(): Promise<void> {");
   assert.ok(validateStart > 0);
   const validateBody = handler.slice(validateStart);
-  assert.ok(validateBody.indexOf("applyTrustedLockfile(bundle.context, rawProposal)") > 0);
+  assert.ok(validateBody.indexOf("applyTrustedLockfile(bundle.contract, bundle.context, rawProposal)") > 0);
   assert.ok(validateBody.indexOf("applyTrustedLockfile(") < validateBody.indexOf("createCandidateChangeSet(bundle.contract, bundle.context, proposal)"));
   assert.equal((handler.match(/applyTrustedLockfile\(/g) ?? []).length, 1);
   assert.equal(handler.slice(0, validateStart).includes("applyTrustedLockfile("), false); // prepare / reuse는 그대로
