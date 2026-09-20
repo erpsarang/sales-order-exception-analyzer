@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { createImplementContextPack } from "./context-pack.js";
 import { verifyImplementContract, type ImplementContract } from "./implement-contract.js";
 import {
+  createHandoffLineage,
+  HANDOFF_LINEAGE_FILE,
+  handoffTriggerFromGitHubEvent,
+  verifyHandoffLineage,
+} from "./lineage/handoff-lineage.js";
+import {
   createPlanImplementContract,
   createPlanImplementHandoffManifest,
   createPlanRebindProvenance,
@@ -22,6 +28,7 @@ import {
 } from "./plan-implement-handoff.js";
 import { planAuthorizeArtifactName, type PlanAuthorizeArtifact } from "./plan-authorization.js";
 import { createSinglePassPrompt, WORKER_OUTPUT_SCHEMA } from "./single-pass-worker.js";
+import type { PlanImplementHandoffManifest } from "./plan-implement-handoff.js";
 
 interface SourceRecord {
   readonly authorization: PlanAuthorizeArtifact;
@@ -250,7 +257,44 @@ function buildContext(): void {
   writeFileSync(join(directory, "handoff.json"), JSON.stringify(manifest, null, 2));
 }
 
+/**
+ * Canonical Execution Lineage shadow (Step 2A).
+ * 이미 만들어진 Handoff 산출물을 읽기만 하고, 별도 디렉터리에 lineage.json 하나만 쓴다.
+ * 기존 Handoff 파일과 판정에는 영향을 주지 않는다.
+ */
+function buildLineage(): void {
+  const directory = required("HANDOFF_OUTPUT");
+  const lineageDirectory = required("LINEAGE_OUTPUT");
+  const observedControlSha = required("OBSERVED_CONTROL_SHA");
+  const expectedControlSha = required("EXPECTED_CONTROL_SHA");
+  if (observedControlSha !== expectedControlSha) throw new Error("Handoff lineage control-plane checkout SHA mismatch");
+
+  const contract = JSON.parse(readFileSync(join(directory, "contract.json"), "utf8")) as ImplementContract;
+  const context = JSON.parse(readFileSync(join(directory, "context.json"), "utf8")) as { contextDigest: string };
+  const manifest = JSON.parse(readFileSync(join(directory, "handoff.json"), "utf8")) as PlanImplementHandoffManifest;
+  const source = JSON.parse(readFileSync(join(directory, "source.json"), "utf8")) as SourceRecord;
+
+  const lineage = createHandoffLineage({
+    authorization: source.authorization,
+    ...(source.rebind ? { rebind: source.rebind } : {}),
+    contract,
+    contextDigest: context.contextDigest,
+    manifest,
+    trigger: handoffTriggerFromGitHubEvent(required("HANDOFF_EVENT_NAME")),
+    producer: {
+      runId: positiveInteger("HANDOFF_RUN_ID"),
+      runAttempt: positiveInteger("HANDOFF_RUN_ATTEMPT"),
+      controlPlaneSha: observedControlSha,
+    },
+  });
+  verifyHandoffLineage(JSON.parse(JSON.stringify(lineage)));
+
+  mkdirSync(lineageDirectory, { recursive: true });
+  writeFileSync(join(lineageDirectory, HANDOFF_LINEAGE_FILE), JSON.stringify(lineage, null, 2));
+}
+
 const command = process.argv[2];
 if (command === "prepare") await prepare();
 else if (command === "context") buildContext();
-else throw new Error("usage: plan-implement-handoff-handler.ts <prepare|context>");
+else if (command === "lineage") buildLineage();
+else throw new Error("usage: plan-implement-handoff-handler.ts <prepare|context|lineage>");

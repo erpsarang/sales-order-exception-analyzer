@@ -283,3 +283,35 @@ jobs:
             ${{ runner.temp }}/plan-implement-handoff/handoff.json
             ${{ runner.temp }}/plan-implement-handoff/source.json
           if-no-files-found: error
+
+      # Canonical Execution Lineage Step 2A — shadow only.
+      # 기존 Handoff artifact 저장이 끝난 뒤에 실행되며, 실패해도 Handoff 결과를 바꾸지 않는다.
+      # lineage.json은 기존 artifact에 넣지 않고 sibling artifact로 발행한다
+      # (downstream은 Handoff artifact의 exact file set을 검증하며, 아직 lineage를 읽지 않는다).
+      - name: Canonical Execution Lineage shadow 생성
+        if: steps.source.outputs.should_run == 'true'
+        id: lineage
+        continue-on-error: true
+        working-directory: control
+        shell: bash
+        env:
+          HANDOFF_OUTPUT: ${{ runner.temp }}/plan-implement-handoff
+          LINEAGE_OUTPUT: ${{ runner.temp }}/plan-implement-handoff-lineage
+          HANDOFF_RUN_ID: ${{ github.run_id }}
+          HANDOFF_RUN_ATTEMPT: ${{ github.run_attempt }}
+          HANDOFF_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_CONTROL_SHA: ${{ steps.source.outputs.control_sha }}
+        run: |
+          set -euo pipefail
+          OBSERVED_CONTROL_SHA="$(git rev-parse HEAD)"
+          export OBSERVED_CONTROL_SHA
+          node --import tsx src/self-improvement/plan-implement-handoff-handler.ts lineage
+
+      - name: Canonical Execution Lineage shadow artifact 저장
+        if: steps.source.outputs.should_run == 'true' && steps.lineage.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.prepare.outputs.artifact_name }}-lineage
+          path: ${{ runner.temp }}/plan-implement-handoff-lineage/lineage.json
+          if-no-files-found: error
