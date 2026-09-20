@@ -7,6 +7,7 @@ import {
   createPlanRebindProvenance,
   PLAN_IMPLEMENT_MAX_CONTEXT_BYTES,
   PLAN_IMPLEMENT_MAX_PATCH_BYTES,
+  PLAN_REBIND_MAX_DRIFT_FILES,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
   validatePlanAuthorizeSourceForRebind,
