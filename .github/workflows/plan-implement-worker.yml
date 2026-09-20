@@ -915,6 +915,7 @@ jobs:
   repair1:
     needs: attempt0_result
     if: >-
+      always() &&
       needs.attempt0_result.outputs.ci_status == 'FAIL' &&
       needs.attempt0_result.outputs.repair_ready == 'true'
     permissions:
@@ -1164,6 +1165,7 @@ jobs:
   repair2:
     needs: [attempt0_result, repair1]
     if: >-
+      always() &&
       needs.repair1.outputs.ci_status == 'FAIL' &&
       needs.repair1.outputs.repair_ready == 'true'
     permissions:
