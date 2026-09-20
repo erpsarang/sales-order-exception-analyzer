@@ -295,11 +295,24 @@ function directTestImportsSource(testPath: string, testText: string, sourcePath:
   });
 }
 
+function projectBootstrapContextPaths<T extends { path: string }>(
+  requirement: string,
+  candidates: readonly T[],
+): string[] {
+  const hasWebIntent = /(?:브라우저|웹|browser|web|frontend|front-end|vite)/i.test(requirement);
+  const excludesWeb = /(?:브라우저|웹|browser|web|frontend|front-end|vite).{0,40}(?:제외|범위 밖|하지 않|사용하지 않|out of scope|exclude)/i.test(requirement);
+  if (!hasWebIntent || excludesWeb) return [];
+
+  const available = new Set(candidates.map((candidate) => candidate.path));
+  return ["package.json", "tsconfig.json"].filter((path) => available.has(path));
+}
+
 function diverseRankedCandidates<T extends { path: string; text: string; score: number }>(
   candidates: readonly T[],
   maxFiles: number,
   anchors: readonly string[],
   pathAnchors: readonly string[],
+  projectContextPaths: readonly string[],
   scriptPathAnchors: readonly string[],
 ): T[] {
   const positive = candidates.filter((candidate) => candidate.score > 0);
@@ -313,6 +326,9 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
   // selection hints. Preserve every readable exact match while the file budget allows,
   // in requirement order, before lexical relevance can consume those slots.
   for (const path of pathAnchors) {
+    add(candidates.find((candidate) => candidate.path === path));
+  }
+  for (const path of projectContextPaths) {
     add(candidates.find((candidate) => candidate.path === path));
   }
   for (const path of scriptPathAnchors) {
@@ -404,8 +420,9 @@ export function selectPlanContext(
   }).filter((value): value is { path: string; text: string; score: number } => value !== null);
 
   candidates.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const projectContextPaths = projectBootstrapContextPaths(requirement, candidates);
   const scriptPathAnchors = packageScriptPathAnchors(requirement, candidates);
-  const ranked = diverseRankedCandidates(candidates, maxFiles, anchors, pathAnchors, scriptPathAnchors);
+  const ranked = diverseRankedCandidates(candidates, maxFiles, anchors, pathAnchors, projectContextPaths, scriptPathAnchors);
 
   const files: PlanContextFile[] = [];
   let totalBytes = 0;

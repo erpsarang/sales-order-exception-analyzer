@@ -36,7 +36,7 @@ function isFrameworkSource(path: string): boolean {
 }
 
 function isProjectExecutionContext(path: string): boolean {
-  return path === "package.json";
+  return path === "package.json" || path === "tsconfig.json";
 }
 
 function walkFiles(target: string, root: string): string[] {
