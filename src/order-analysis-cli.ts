@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import type { OrderInput } from "./order-analysis.js";
 
@@ -35,11 +35,39 @@ function validateOrders(value: unknown): asserts value is OrderInput[] {
   });
 }
 
+function escapeCsvCell(value: string | number | undefined): string {
+  const text = value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeof analyzeOrderBatch>): string {
+  const header = ["주문번호", "자재", "수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"];
+  const rows = batch.exceptionWorklist.map((item) => {
+    const order = orders[item.resultIndex]!;
+    return [
+      order.orderId,
+      order.materialId,
+      order.orderQuantity,
+      order.customerId,
+      order.estimatedAmount,
+      order.dueDate,
+      order.orderComment,
+      item.exceptionGuides.map((guide) => guide.reasonCode).join(", "),
+    ].map(escapeCsvCell).join(",");
+  });
+  return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
+}
+
 export async function runOrderAnalysisCli(args: string[]): Promise<string> {
-  if (args.length !== 1 || !args[0]) {
-    throw new Error("주문 JSON 파일 경로 하나를 지정하세요. 사용법: npm run analyze -- orders.json");
+  let filePath: string;
+  let csvPath: string | undefined;
+  if (args.length === 1 && args[0]) {
+    [filePath] = args;
+  } else if (args.length === 3 && args[0] && args[1] === "--csv" && args[2]) {
+    [filePath, , csvPath] = args;
+  } else {
+    throw new Error("주문 JSON 파일 경로 하나를 지정하고, 필요하면 --csv <output.csv>를 추가하세요. 사용법: npm run analyze -- orders.json [--csv output.csv]");
   }
-  const filePath = args[0];
   let source: string;
   try {
     source = await readFile(filePath, "utf8");
@@ -54,6 +82,13 @@ export async function runOrderAnalysisCli(args: string[]): Promise<string> {
   }
   validateOrders(orders);
   const batch = analyzeOrderBatch(orders);
+  if (csvPath) {
+    try {
+      await writeFile(csvPath, createExceptionCsv(orders, batch), "utf8");
+    } catch {
+      throw new Error(`CSV 파일을 저장할 수 없습니다: ${JSON.stringify(csvPath)}. 경로와 쓰기 권한을 확인하세요.`);
+    }
+  }
   const lines = [
     `주문 분석: 전체 ${batch.summary.totalCount}건 / 정상 ${batch.summary.shipReadyCount}건 / 예외 ${batch.summary.exceptionCount}건`,
     "주문별 결과 (입력 순서):",
