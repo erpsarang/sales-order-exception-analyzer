@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>주문 예외 분석기</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header>
+        <p class="eyebrow">Sales order exception analyzer</p>
+        <h1>주문 예외 분석기</h1>
+        <p>CSV 파일을 선택해 출고 가능 주문과 확인이 필요한 예외 주문을 분류합니다.</p>
+      </header>
+      <section class="upload-panel" aria-labelledby="upload-title">
+        <h2 id="upload-title">주문 CSV 업로드</h2>
+        <label for="csv-file">CSV 파일</label>
+        <input id="csv-file" type="file" accept=".csv,text/csv" />
+        <button id="analyze-button" type="button">분석하기</button>
+        <p class="hint">필수 열: orderId, customerId, materialId, orderQuantity, availableQuantity, customerBlocked, materialBlocked</p>
+      </section>
+      <p id="error-message" class="error" role="alert" hidden></p>
+      <section id="result-section" hidden aria-live="polite">
+        <div class="summary-grid">
+          <article><span>전체</span><strong id="total-count">0</strong><small>건</small></article>
+          <article><span>정상</span><strong id="ready-count">0</strong><small>건</small></article>
+          <article class="exception-summary"><span>예외</span><strong id="exception-count">0</strong><small>건</small></article>
+        </div>
+        <div class="result-heading">
+          <div><h2>예외 주문</h2><p id="empty-message" hidden>처리할 예외 주문이 없습니다.</p></div>
+          <button id="download-button" type="button" hidden>예외 CSV 다운로드</button>
+        </div>
+        <div class="table-wrap">
+          <table id="exception-table" hidden>
+            <thead><tr><th>주문번호</th><th>자재</th><th>수량</th><th>거래처</th><th>예상금액</th><th>납기일</th><th>주문 코멘트</th><th>예외 사유</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/web-main.ts"></script>
+  </body>
+</html>
