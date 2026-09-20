@@ -7,12 +7,16 @@ import { verifyImplementContract, type ImplementContract } from "./implement-con
 import {
   createPlanImplementContract,
   createPlanImplementHandoffManifest,
+  createPlanRebindProvenance,
   PLAN_AUTHORIZE_WORKFLOW_PATH,
   PLAN_WORKFLOW_PATH,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
+  validatePlanAuthorizeSourceForRebind,
   verifyPlanAuthorizeArtifact,
+  verifyPlanRebindProvenance,
   type PlanAuthorizeArtifactMetadata,
+  type PlanRebindProvenance,
   type PlanAuthorizeSourceRun,
 } from "./plan-implement-handoff.js";
 import { planAuthorizeArtifactName, type PlanAuthorizeArtifact } from "./plan-authorization.js";
@@ -21,6 +25,7 @@ import { createSinglePassPrompt, WORKER_OUTPUT_SCHEMA } from "./single-pass-work
 interface SourceRecord {
   readonly authorization: PlanAuthorizeArtifact;
   readonly sourceArtifact: PlanAuthorizeArtifactMetadata;
+  readonly rebind?: PlanRebindProvenance;
 }
 
 function required(name: string): string {
@@ -148,7 +153,9 @@ async function prepare(): Promise<void> {
   if (source.id !== sourceRunId || source.runAttempt !== sourceRunAttempt) {
     throw new Error("selected PLAN_AUTHORIZE run identity changed");
   }
-  validatePlanAuthorizeSource(authorization, source);
+  const rebindTargetSha = process.env.REBIND_TARGET_SHA?.trim();
+  if (rebindTargetSha) validatePlanAuthorizeSourceForRebind(authorization, source, rebindTargetSha);
+  else validatePlanAuthorizeSource(authorization, source);
 
   const sourceArtifactsResponse = await api<any>(`/repos/${owner}/${repo}/actions/runs/${sourceRunId}/artifacts?per_page=100`);
   const sourceMatches = (sourceArtifactsResponse.artifacts ?? []).filter((item: any) => item.name === sourceArtifact.name && !item.expired);
@@ -180,10 +187,35 @@ async function prepare(): Promise<void> {
   assertExactArtifact(exactProvenance[0], authorization.plan.provenanceArtifact, "approved PLAN provenance");
 
   const planJson = await readArtifactJson(authorization.plan.artifact.id, "PLAN.json");
-  const contract = createPlanImplementContract(authorization, planJson);
+  let rebind: PlanRebindProvenance | undefined;
+  if (rebindTargetSha) {
+    if (currentDefaultSha !== rebindTargetSha) throw new Error("PLAN rebind target moved during prepare");
+    const comparison = await api<any>(
+      `/repos/${owner}/${repo}/compare/${authorization.targetSha}...${rebindTargetSha}`,
+    );
+    const files: any[] = comparison.files ?? [];
+    if (
+      comparison.status !== "ahead" ||
+      comparison.merge_base_commit?.sha !== authorization.targetSha ||
+      files.length < 1 ||
+      files.length > 12
+    ) {
+      throw new Error("PLAN rebind drift is not a bounded ancestor diff");
+    }
+    const rejected = files.filter((file) => !["added", "modified"].includes(String(file.status ?? "")));
+    if (rejected.length > 0) throw new Error("PLAN rebind drift contains unsupported file status");
+    const changedPaths = files.map((file) => String(file.filename ?? ""));
+    rebind = createPlanRebindProvenance(authorization, planJson, rebindTargetSha, changedPaths);
+  }
+
+  const contract = createPlanImplementContract(authorization, planJson, rebind);
   verifyImplementContract(contract);
 
-  const sourceRecord: SourceRecord = { authorization, sourceArtifact };
+  const sourceRecord: SourceRecord = {
+    authorization,
+    sourceArtifact,
+    ...(rebind ? { rebind } : {}),
+  };
   writeFileSync(join(directory, "contract.json"), JSON.stringify(contract, null, 2));
   writeFileSync(join(directory, "source.json"), JSON.stringify(sourceRecord, null, 2));
 
@@ -199,6 +231,7 @@ function buildContext(): void {
   verifyImplementContract(contract);
   const source = JSON.parse(readFileSync(join(directory, "source.json"), "utf8")) as SourceRecord;
   const authorization = verifyPlanAuthorizeArtifact(source.authorization);
+  const rebind = source.rebind ? verifyPlanRebindProvenance(source.rebind, authorization) : undefined;
 
   const context = createImplementContextPack(contract, targetRoot, observedBaseSha);
   const prompt = createSinglePassPrompt(contract, context);
@@ -207,6 +240,7 @@ function buildContext(): void {
     sourceArtifact: source.sourceArtifact,
     contract,
     contextDigest: context.contextDigest,
+    ...(rebind ? { rebind } : {}),
   });
 
   writeFileSync(join(directory, "context.json"), JSON.stringify(context, null, 2));

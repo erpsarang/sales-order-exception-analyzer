@@ -6,7 +6,9 @@ import test from "node:test";
 import { createImplementContextPack } from "../src/self-improvement/context-pack.js";
 import { createImplementContract } from "../src/self-improvement/implement-contract.js";
 import {
+  createPlanImplementContract,
   createPlanImplementHandoffManifest,
+  createPlanRebindProvenance,
   planImplementHandoffArtifactName,
 } from "../src/self-improvement/plan-implement-handoff.js";
 import {
@@ -175,6 +177,79 @@ test("source handoff workflow/default HEAD/artifact identity가 exact하지 않�
   assert.throws(
     () => validatePlanImplementWorkerSource(bundle, sourceRun(), { ...artifact, name: "other-artifact" }),
     /artifact name mismatch/,
+  );
+});
+
+test("rebind Handoff bundle은 issue_comment source만 exact 허용한다", () => {
+  const approved = authorization();
+  const reboundTargetSha = "9".repeat(40);
+  const planValue = {
+    kind: "untrusted-plan",
+    repository: approved.repository,
+    sha: approved.targetSha,
+    requirement: "README 상태 설명을 추가한다",
+    context: {
+      digestAlgorithm: "sha256",
+      digest: "8".repeat(64),
+      evidence: [],
+      totalBytes: 0,
+    },
+    plan: {
+      questions: [],
+      approach: ["README 상태 설명을 추가한다"],
+      implementationScope: {
+        ready: true,
+        allowedPaths: ["README.md"],
+        requiredChanges: ["README 상태 설명 추가"],
+        forbiddenChanges: [],
+        validationCommands: ["npm test"],
+      },
+    },
+  };
+  const rebind = createPlanRebindProvenance(
+    approved,
+    planValue,
+    reboundTargetSha,
+    ["src/self-improvement/deterministic-ci.ts"],
+  );
+  const contract = createPlanImplementContract(approved, planValue, rebind);
+  const root = mkdtempSync(join(tmpdir(), "plan-worker-rebind-test-"));
+  writeFileSync(join(root, "README.md"), "# Framework\n");
+  const context = createImplementContextPack(contract, root, reboundTargetSha);
+  rmSync(root, { recursive: true, force: true });
+
+  const sourcePlanAuthorizeArtifact = {
+    name: planAuthorizeArtifactName(approved),
+    id: 10309133636,
+    digest: "e".repeat(64),
+  };
+  const handoff = createPlanImplementHandoffManifest({
+    authorization: approved,
+    sourceArtifact: sourcePlanAuthorizeArtifact,
+    contract,
+    contextDigest: context.contextDigest,
+    rebind,
+  });
+  const bundle = verifyPlanImplementWorkerBundle({
+    contract,
+    context,
+    handoff,
+    source: { authorization: approved, sourceArtifact: sourcePlanAuthorizeArtifact, rebind },
+    prompt: createSinglePassPrompt(contract, context),
+    schema: WORKER_OUTPUT_SCHEMA,
+  });
+  const artifact = handoffArtifact(approved);
+  const reboundSource = sourceRun({
+    event: "issue_comment",
+    headSha: reboundTargetSha,
+    currentDefaultSha: reboundTargetSha,
+  });
+
+  assert.equal(bundle.rebind?.rebindDigest, rebind.rebindDigest);
+  assert.doesNotThrow(() => validatePlanImplementWorkerSource(bundle, reboundSource, artifact));
+  assert.throws(
+    () => validatePlanImplementWorkerSource(bundle, { ...reboundSource, event: "workflow_run" }, artifact),
+    /successful issue_comment/,
   );
 });
 

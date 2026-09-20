@@ -115,8 +115,12 @@ jobs:
               core.setOutput('recovery_current_sha', recovery.currentDefaultSha);
               return;
             }
-            if (run.name !== 'Trusted PLAN IMPLEMENT Handoff' || run.path !== '.github/workflows/plan-implement-handoff.yml' || run.event !== 'workflow_run') {
-              core.setFailed(`unexpected source handoff workflow: ${run.name} ${run.path}`);
+            if (
+              run.name !== 'Trusted PLAN IMPLEMENT Handoff' ||
+              run.path !== '.github/workflows/plan-implement-handoff.yml' ||
+              !['workflow_run', 'issue_comment'].includes(run.event)
+            ) {
+              core.setFailed(`unexpected source handoff workflow: ${run.name} ${run.path} ${run.event}`);
               return;
             }
 
