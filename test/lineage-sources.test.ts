@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   allowedStageTriggers,
   FIRST_CHAIN_STAGE,
+  HANDOFF_SOURCE_EVENTS,
   isAllowedStageProducer,
   isChainStage,
   isLineageStage,
@@ -220,11 +221,75 @@ test("invariant: authorize / handoff / recovery 세 곳은 모두 동일한 PLAN
   assert.deepEqual([...PLAN_TRIGGER_EVENTS], ["workflow_dispatch", "issues"]);
 });
 
-test("known divergence (P2, 동작 변경 없음): preflight는 Handoff의 issue_comment(rebind) source를 아직 거부한다", () => {
-  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.handoffRunAcceptedBy.planWorkerRecoveryPreflightWorkflow], ["workflow_run"]);
-  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.handoffRunAcceptedBy.planImplementWorkerWorkflow], ["workflow_run", "issue_comment"]);
-  const preflight = readFileSync(".github/workflows/plan-worker-recovery-preflight.yml", "utf8");
-  assert.match(preflight, /handoff\.event !== 'workflow_run'/);
-  const worker = readFileSync(".github/workflows/plan-implement-worker.yml", "utf8");
-  assert.match(worker, /!\['workflow_run', 'issue_comment'\]\.includes\(run\.event\)/);
+/** workflow YAML 안의 `![...].includes(<subject>.event)` 리터럴에서 허용 event 집합을 뽑는다. */
+function handoffEventsAllowedBy(workflowPath: string, subject: "run" | "handoff"): string[] {
+  const yaml = readFileSync(workflowPath, "utf8");
+  const pattern = new RegExp(`!\\[([^\\]]+)\\]\\.includes\\(${subject}\\.event\\)`, "g");
+  const matches = [...yaml.matchAll(pattern)];
+  assert.equal(matches.length, 1, `${workflowPath}: exactly one Handoff event allowlist expected`);
+  return matches[0]![1]!.split(",").map((item) => item.trim().replace(/^'(.*)'$/, "$1"));
+}
+
+test("P2 해소 (Step 1B-2): Worker / Bridge / Recovery Preflight는 동일한 canonical Handoff source event 집합을 사용한다 (parity)", () => {
+  assert.deepEqual([...HANDOFF_SOURCE_EVENTS], ["workflow_run", "issue_comment"]);
+
+  // 진단 데이터는 값을 복제하지 않고 같은 객체를 참조한다.
+  const acceptance = UPSTREAM_EVENT_ACCEPTANCE.handoffRunAcceptedBy;
+  assert.equal(acceptance.planImplementWorkerWorkflow, HANDOFF_SOURCE_EVENTS);
+  assert.equal(acceptance.planCandidateBridgeWorkflow, HANDOFF_SOURCE_EVENTS);
+  assert.equal(acceptance.planWorkerRecoveryPreflightWorkflow, HANDOFF_SOURCE_EVENTS);
+  assert.deepEqual(Object.keys(acceptance).sort(), [
+    "planCandidateBridgeWorkflow",
+    "planImplementWorkerLibrary",
+    "planImplementWorkerWorkflow",
+    "planWorkerRecoveryPreflightWorkflow",
+  ]);
+
+  // 실제 workflow YAML 리터럴도 canonical 집합과 exact parity (순서 포함).
+  const consumers: Array<[string, "run" | "handoff"]> = [
+    [WORKFLOWS.planImplementWorker.path, "run"],
+    [WORKFLOWS.planCandidateBridge.path, "handoff"],
+    [WORKFLOWS.planWorkerRecoveryPreflight.path, "handoff"],
+  ];
+  for (const [workflowPath, subject] of consumers) {
+    assert.deepEqual(handoffEventsAllowedBy(workflowPath, subject), [...HANDOFF_SOURCE_EVENTS], workflowPath);
+  }
+});
+
+test("invariant: canonical 집합 밖의 Handoff event는 어떤 consumer도 허용하지 않는다", () => {
+  const consumers: Array<[string, "run" | "handoff"]> = [
+    [WORKFLOWS.planImplementWorker.path, "run"],
+    [WORKFLOWS.planCandidateBridge.path, "handoff"],
+    [WORKFLOWS.planWorkerRecoveryPreflight.path, "handoff"],
+  ];
+  const canonical = new Set<string>(HANDOFF_SOURCE_EVENTS);
+  for (const [workflowPath, subject] of consumers) {
+    const allowed = handoffEventsAllowedBy(workflowPath, subject);
+    for (const event of allowed) assert.ok(canonical.has(event), `${workflowPath} allows non-canonical ${event}`);
+    for (const event of ["push", "issues", "workflow_dispatch", "pull_request", "schedule", ""]) {
+      assert.equal(allowed.includes(event), false, `${workflowPath} must not allow ${event}`);
+    }
+  }
+  // preflight에 예전 단일 event 비교가 남아 있지 않다.
+  const preflight = readFileSync(WORKFLOWS.planWorkerRecoveryPreflight.path, "utf8");
+  assert.equal(preflight.includes("handoff.event !== 'workflow_run'"), false);
+  assert.equal(/handoff\.event\s*[!=]==/.test(preflight), false);
+  // canonical 집합은 Handoff workflow 자신의 producer rule(GitHub event)과 같다.
+  assert.deepEqual(
+    STAGE_PRODUCERS.handoff.rules.map((rule) => rule.githubEvent).sort(),
+    [...HANDOFF_SOURCE_EVENTS].sort(),
+  );
+});
+
+test("Worker library의 rebind 조건부 규칙은 canonical 집합 안에서 더 강한 조건으로 유지된다", () => {
+  const library = UPSTREAM_EVENT_ACCEPTANCE.handoffRunAcceptedBy.planImplementWorkerLibrary;
+  assert.deepEqual([...library.withRebind], ["issue_comment"]);
+  assert.deepEqual([...library.withoutRebind], ["workflow_run"]);
+  for (const event of [...library.withRebind, ...library.withoutRebind]) {
+    assert.ok((HANDOFF_SOURCE_EVENTS as readonly string[]).includes(event), event);
+  }
+  assert.deepEqual([...library.withRebind, ...library.withoutRebind].sort(), [...HANDOFF_SOURCE_EVENTS].sort());
+  const source = readFileSync("src/self-improvement/plan-implement-worker.ts", "utf8");
+  assert.ok(source.includes('const expectedEvent = bundle.rebind ? "issue_comment" : "workflow_run";'));
+  assert.ok(source.includes("if (source.event !== expectedEvent || source.conclusion !== \"success\") {"));
 });
