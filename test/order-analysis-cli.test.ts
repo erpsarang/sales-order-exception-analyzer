@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { runOrderAnalysisCli } from "../src/order-analysis-cli.js";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,13 +65,56 @@ test("빈 배열과 정상 주문만 있는 파일도 성공한다", async () =>
   }
 });
 
+test("CSV 옵션은 예외 작업 목록을 UTF-8 BOM CSV로 저장하고 셀을 이스케이프한다", async () => {
+  const exception = {
+    ...normal,
+    orderId: "SO,\"1\"",
+    materialId: "M\n1",
+    orderQuantity: 0,
+    customerId: "C,1",
+    estimatedAmount: 1200,
+    dueDate: "2026-10-02",
+    orderComment: "첫 줄\n\"둘째 줄\"",
+    availableQuantity: -1,
+    customerBlocked: true,
+    materialBlocked: true,
+  };
+  await withFile(JSON.stringify([exception]), async (path) => {
+    const csvPath = join(fileURLToPath(new URL(".", `file://${path}`)), "exceptions.csv");
+    const result = await run([path, "--csv", csvPath]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(csvPath, "utf8"), "\uFEFF주문번호,자재,수량,거래처,예상금액,납기일,주문 코멘트,예외 사유\n\"SO,\"\"1\"\"\",\"M\n1\",0,\"C,1\",1200,2026-10-02,\"첫 줄\n\"\"둘째 줄\"\"\",\"INVALID_QUANTITY, CUSTOMER_BLOCKED, MATERIAL_BLOCKED, INSUFFICIENT_STOCK\"\n");
+  });
+});
+
+test("CSV 옵션은 빈 예외 결과에도 헤더만 저장하고, 지정하지 않으면 파일을 만들지 않는다", async () => {
+  await withFile(JSON.stringify([normal]), async (path) => {
+    const csvPath = join(fileURLToPath(new URL(".", `file://${path}`)), "exceptions.csv");
+    const withoutCsv = await run([path]);
+    assert.equal(withoutCsv.status, 0, withoutCsv.stderr);
+    assert.equal(existsSync(csvPath), false);
+    const withCsv = await run([path, "--csv", csvPath]);
+    assert.equal(withCsv.status, 0, withCsv.stderr);
+    assert.equal(readFileSync(csvPath, "utf8"), "\uFEFF주문번호,자재,수량,거래처,예상금액,납기일,주문 코멘트,예외 사유\n");
+  });
+});
+
 test("인자 오류와 읽을 수 없는 파일은 실패 코드와 안내를 반환한다", async () => {
-  for (const args of [[], ["a", "b"], [join(root, "missing-orders-file.json")], [root]]) {
+  for (const args of [[], ["a", "b"], ["a", "--csv"], ["a", "--output", "b"], [join(root, "missing-orders-file.json")], [root]]) {
     const result = await run(args);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /사용법|파일을 읽을 수 없습니다/);
   }
+});
+
+test("CSV 저장 오류는 분석 결과 없이 실패한다", async () => {
+  await withFile(JSON.stringify([normal]), async (path) => {
+    const result = await run([path, "--csv", join(path, "exceptions.csv")]);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /CSV 파일을 저장할 수 없습니다/);
+  });
 });
 
 test("잘못된 JSON과 주문 필드는 부분 결과 없이 거부한다", async () => {
