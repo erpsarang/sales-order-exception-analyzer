@@ -259,15 +259,28 @@ export function createPlanImplementContract(
   const trustedAuthorization = verifyPlanAuthorizeArtifact(authorization);
   const plan = extractCanonicalPlanDocument(planValue, trustedAuthorization);
   const scope = plan.implementationScope;
+  const allowedPaths = [...scope.allowedPaths];
+  const requiredChanges = [...scope.requiredChanges];
+
+  if (allowedPaths.includes("package.json")) {
+    if (!allowedPaths.includes("package-lock.json")) {
+      if (allowedPaths.length >= PLAN_IMPLEMENT_MAX_FILES) {
+        throw new Error("approved PLAN package.json change requires package-lock.json within bounded scope");
+      }
+      allowedPaths.push("package-lock.json");
+    }
+    requiredChanges.push("package.json 변경 시 package-lock.json을 같은 candidate에서 동기화한다.");
+  }
+
   return createImplementContract(toApprovedPlanIdentity(trustedAuthorization), {
-    allowedPaths: scope.allowedPaths,
+    allowedPaths,
     requiredChanges: [
-      ...scope.requiredChanges,
+      ...requiredChanges,
       ...plan.approach.map((item) => `승인된 PLAN approach: ${item}`),
     ],
     forbiddenChanges: scope.forbiddenChanges,
     validationCommands: scope.validationCommands,
-    maxFilesChanged: scope.allowedPaths.length,
+    maxFilesChanged: allowedPaths.length,
     maxContextBytes: PLAN_IMPLEMENT_MAX_CONTEXT_BYTES,
     maxPatchBytes: PLAN_IMPLEMENT_MAX_PATCH_BYTES,
   });
