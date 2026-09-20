@@ -319,12 +319,19 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
     add(candidates.find((candidate) => candidate.path === path));
   }
 
+  const scriptRuntimes = scriptPathAnchors
+    .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
+    .filter((candidate): candidate is T => candidate !== undefined);
+  const scriptDirectTests = scriptRuntimes
+    .map((source) => candidates.find((candidate) => directTestImportsSource(candidate.path, candidate.text, source.path)))
+    .filter((candidate): candidate is T => candidate !== undefined);
+  for (const candidate of scriptDirectTests) add(candidate);
+  if (scriptPathAnchors.length > 0) add(candidates.find((entry) => entry.path === "package.json"));
+
   const explicitRuntime = pathAnchors
     .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
     .find((candidate): candidate is T => candidate !== undefined);
-  const scriptRuntime = scriptPathAnchors
-    .map((path) => candidates.find((candidate) => candidate.path === path && fileRolePriority(candidate.path) === 0))
-    .find((candidate): candidate is T => candidate !== undefined);
+  const scriptRuntime = scriptRuntimes[0];
   const primaryRuntime = explicitRuntime ?? scriptRuntime ?? fallback.find((entry) => fileRolePriority(entry.path) === 0);
   const primaryDirectTest = primaryRuntime
     ? candidates.find((candidate) => directTestImportsSource(candidate.path, candidate.text, primaryRuntime.path))
@@ -365,7 +372,6 @@ function diverseRankedCandidates<T extends { path: string; text: string; score: 
     }
   }
 
-  if (scriptPathAnchors.length > 0) add(fallback.find((entry) => entry.path === "package.json"));
   add(fallback.find((entry) => fileRolePriority(entry.path) === 1));
   add(fallback.find((entry) => fileRolePriority(entry.path) === 2));
   if (scriptPathAnchors.length === 0) add(fallback.find((entry) => entry.path === "package.json"));
