@@ -176,6 +176,25 @@ function importedRuntimeSources(testPath: string, testText: string, sourcePaths:
   return result.sort((a, b) => sourceAffinity(testPath, b) - sourceAffinity(testPath, a) || a.localeCompare(b));
 }
 
+function selectedRelationProtection(target: string, context: PlanContextPack): ReadonlySet<string> {
+  const contextPaths = new Set(context.files.map((file) => file.path));
+  const sourcePaths = walkFiles(target, "src").filter(isRuntimeSource);
+  const protectedPaths = new Set<string>();
+
+  for (const file of context.files) {
+    if (isProjectExecutionContext(file.path)) protectedPaths.add(file.path);
+    if (!isTestLike(file.path)) continue;
+    const text = decodeText(join(target, file.path));
+    if (text === null) continue;
+    for (const sourcePath of importedRuntimeSources(file.path, text, sourcePaths)) {
+      if (!contextPaths.has(sourcePath) || isFrameworkSource(sourcePath)) continue;
+      protectedPaths.add(sourcePath);
+      protectedPaths.add(file.path);
+    }
+  }
+  return protectedPaths;
+}
+
 function trimUtf8(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   let low = 0;
@@ -357,20 +376,31 @@ export function augmentPlanContextWithBusinessRelations(
 
   const candidatePaths = new Set(candidates.map((file) => file.path));
   const retained = context.files.filter((file) => !candidatePaths.has(file.path));
-  const projectExecutionContext = retained.filter((file) => isProjectExecutionContext(file.path));
-  const ordinaryRetained = retained.filter((file) => !isProjectExecutionContext(file.path));
+  const protectedPaths = selectedRelationProtection(target, context);
+  const protectedRetained = retained.filter((file) => protectedPaths.has(file.path));
+  const ordinaryRetained = retained.filter((file) => !protectedPaths.has(file.path));
 
-  // Business source/test 관계를 보강하더라도 1차 selector가 이미 선택한
-  // 프로젝트 실행 설정은 Framework noise보다 우선 보존한다.
-  const selectedCandidates = candidates.slice(0, Math.max(0, maxFiles - projectExecutionContext.length));
-  const files = [...selectedCandidates, ...projectExecutionContext, ...ordinaryRetained].slice(0, maxFiles);
-  const requiredCount = selectedCandidates.length + projectExecutionContext.length;
+  // Business augmentation is optional. Preserve the primary selector's existing
+  // App runtime/direct-test contract and project execution context first, then use
+  // only the remaining file/byte budget for additional business relations.
+  let selectedCandidates = candidates.slice(0, Math.max(0, maxFiles - protectedRetained.length));
+  const protectedBytes = protectedRetained.reduce((sum, file) => sum + file.byteLength, 0);
+  while (
+    selectedCandidates.length >= 2 &&
+    protectedBytes + selectedCandidates.reduce((sum, file) => sum + file.byteLength, 0) > maxBytes
+  ) {
+    selectedCandidates = selectedCandidates.slice(0, -1);
+  }
+  if (selectedCandidates.length < 2) return context;
+
+  const files = [...selectedCandidates, ...protectedRetained, ...ordinaryRetained].slice(0, maxFiles);
+  const requiredCount = selectedCandidates.length + protectedRetained.length;
   let totalBytes = files.reduce((sum, file) => sum + file.byteLength, 0);
   while (totalBytes > maxBytes && files.length > requiredCount) {
     const removed = files.pop()!;
     totalBytes -= removed.byteLength;
   }
-  if (totalBytes > maxBytes) throw new Error("Business relation Context Pack cannot fit within trusted budget");
+  if (totalBytes > maxBytes) return context;
 
   return rebind(context.repository, context.sha, files);
 }
