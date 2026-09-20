@@ -53,7 +53,7 @@ export interface PlanAuthorizeArtifactMetadata {
   readonly digest: string;
 }
 
-export const PLAN_REBIND_MAX_DRIFT_FILES = 12 as const;
+export const PLAN_REBIND_MAX_DRIFT_FILES = 16 as const;
 
 export interface PlanRebindProvenancePayload {
   readonly schemaVersion: 1;

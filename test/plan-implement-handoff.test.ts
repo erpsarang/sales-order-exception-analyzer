@@ -214,6 +214,25 @@ test("Framework-only drift는 기존 Human 승인 PLAN을 current SHA에 trusted
   assert.equal(handoff.rebindDigest, rebind.rebindDigest);
 });
 
+test("PLAN rebind bounded drift는 16 files까지 허용하고 17 files부터 거부한다", () => {
+  const approved = authorization();
+  const reboundTargetSha = "e".repeat(40);
+  const planValue = canonicalPlanArtifact();
+  const sixteen = Array.from({ length: PLAN_REBIND_MAX_DRIFT_FILES }, (_, index) =>
+    `src/self-improvement/rebind-${String(index + 1).padStart(2, "0")}.ts`
+  );
+  const seventeen = [...sixteen, "src/self-improvement/rebind-17.ts"];
+
+  assert.equal(PLAN_REBIND_MAX_DRIFT_FILES, 16);
+  assert.doesNotThrow(() =>
+    createPlanRebindProvenance(approved, planValue, reboundTargetSha, sixteen)
+  );
+  assert.throws(
+    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, seventeen),
+    /exceeds bounded file count/,
+  );
+});
+
 test("PLAN rebind는 App drift 또는 승인 Context/Scope와 겹치는 drift를 fail-closed 한다", () => {
   const approved = authorization();
   const reboundTargetSha = "e".repeat(40);
