@@ -65,6 +65,7 @@ test("recovery default 이동은 bounded Framework-only compare에만 trusted gu
   assert.match(bridgeSection, /'test\/plan-implement-worker\.test\.ts'/);
   assert.match(bridgeSection, /'test\/plan-worker-recovery-preflight-workflow\.test\.ts'/);
   assert.match(bridgeSection, /'test\/plan-trusted-rail-recovery-source\.test\.ts'/);
+  assert.match(bridgeSection, /'test\/review-workflow\.test\.ts'/);
   assert.match(bridgeSection, /'test\/seal-workflow\.test\.ts'/);
   assert.match(bridgeSection, /path\.startsWith\('test\/self-improvement\/'\) \|\| frameworkRootTests\.has\(path\)/);
   assert.doesNotMatch(bridgeSection, /path\.startsWith\('test\/'\)\s*\|\|/);
