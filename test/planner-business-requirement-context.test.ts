@@ -375,7 +375,9 @@ test("business augmentation은 npm run으로 선택된 CLI source/direct test/pa
     assert.ok(paths.length <= 6);
     assert.ok(augmented.totalBytes <= 14_000);
 
-    const withoutDirectTestFiles = selected.files.filter((file) => file.path !== "test/order-analysis-cli.test.ts");
+    const withoutDirectTestFiles = selected.files
+      .filter((file) => file.path !== "test/order-analysis-cli.test.ts")
+      .map((file, index) => ({ ...file, evidenceId: `E${index + 1}` }));
     const withoutDirectTestPayload = {
       schemaVersion: selected.schemaVersion,
       kind: selected.kind,
