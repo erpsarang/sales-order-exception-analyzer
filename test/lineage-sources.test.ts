@@ -200,9 +200,24 @@ test("P1 해소 (Step 1B-1): plan-recovery classifier도 PLAN_TRIGGER_EVENTS와 
   }
   const candidates = ["workflow_dispatch", "issues", "issue_comment", "workflow_run", "push", "pull_request", "schedule"];
   assert.deepEqual(candidates.filter(classifierAccepts), [...PLAN_TRIGGER_EVENTS]);
-  // authorize / handoff handler와 같은 집합이다.
-  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planAuthorizeHandler], candidates.filter(classifierAccepts));
-  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planImplementHandoffHandler], candidates.filter(classifierAccepts));
+  // 진단 데이터도 runtime과 exact parity: 값을 복제하지 않고 같은 객체를 참조한다.
+  const acceptance = UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy;
+  assert.equal(acceptance.planRecoveryClassifier, PLAN_TRIGGER_EVENTS);
+  assert.deepEqual([...acceptance.planRecoveryClassifier], candidates.filter(classifierAccepts));
+});
+
+test("invariant: authorize / handoff / recovery 세 곳은 모두 동일한 PLAN event 집합을 사용한다", () => {
+  const acceptance = UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy;
+  assert.deepEqual(Object.keys(acceptance).sort(), ["planAuthorizeHandler", "planImplementHandoffHandler", "planRecoveryClassifier"]);
+  for (const [consumer, events] of Object.entries(acceptance)) {
+    assert.deepEqual([...events], [...PLAN_TRIGGER_EVENTS], consumer);
+  }
+  // 데이터뿐 아니라 실제 소스도 같은 집합을 쓴다.
+  const literal = JSON.stringify([...PLAN_TRIGGER_EVENTS]).replace(/,/g, ", ");
+  assert.ok(readFileSync("src/self-improvement/plan-authorize-handler.ts", "utf8").includes(`!${literal}.includes(run.event)`));
+  assert.ok(readFileSync("src/self-improvement/plan-implement-handoff-handler.ts", "utf8").includes(`!${literal}.includes(planRun.event)`));
+  assert.ok(readFileSync("src/self-improvement/plan-recovery.ts", "utf8").includes("!(PLAN_TRIGGER_EVENTS as readonly string[]).includes(planRun.event)"));
+  assert.deepEqual([...PLAN_TRIGGER_EVENTS], ["workflow_dispatch", "issues"]);
 });
 
 test("known divergence (P2, 동작 변경 없음): preflight는 Handoff의 issue_comment(rebind) source를 아직 거부한다", () => {
