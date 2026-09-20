@@ -148,10 +148,13 @@ test("PLAN_TRIGGER_EVENTS는 plan-authorize/handoff handler가 현재 허용하�
   assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planImplementHandoffHandler], [...PLAN_TRIGGER_EVENTS]);
 });
 
-test("known divergence (P1, 동작 변경 없음): plan-recovery는 issues PLAN을 아직 거부한다", () => {
-  // Step 1A는 판정을 바꾸지 않는다. 이 테스트는 현재 사실을 고정해, 후속 단계에서
-  // 통합할 때 의도적으로 깨지도록 만든 change detector다.
-  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planRecoveryClassifier], ["workflow_dispatch"]);
+test("P1 해소 (Step 1B-1): plan-recovery classifier도 PLAN_TRIGGER_EVENTS와 동일한 PLAN source를 인정한다 (parity)", () => {
+  // plan-recovery.ts는 event 리터럴을 하드코딩하지 않고 canonical 집합을 사용한다.
+  const recoverySource = readFileSync("src/self-improvement/plan-recovery.ts", "utf8");
+  assert.ok(recoverySource.includes('import { PLAN_TRIGGER_EVENTS } from "./lineage/sources.js";'));
+  assert.ok(recoverySource.includes("!(PLAN_TRIGGER_EVENTS as readonly string[]).includes(planRun.event)"));
+  assert.equal(recoverySource.includes('planRun.event !== "workflow_dispatch"'), false);
+  assert.equal(/planRun\.event\s*[!=]==/.test(recoverySource), false, "event literal must not be hardcoded");
   const targetSha = "a".repeat(40);
   const authorization = createPlanAuthorizeArtifact({
     normalizedPlan: {
@@ -183,11 +186,23 @@ test("known divergence (P1, 동작 변경 없음): plan-recovery는 issues PLAN�
     headBranch: "main",
     headSha: targetSha,
   });
-  assert.deepEqual(classifyPlanRecovery(authorization, run("workflow_dispatch"), "main", targetSha), { required: false, reason: "NONE" });
-  assert.throws(
-    () => classifyPlanRecovery(authorization, run("issues"), "main", targetSha),
-    /approved PLAN workflow identity is invalid for automatic recovery/,
-  );
+  // 행동 parity: canonical 집합의 모든 event는 인정되고, 그 밖의 event는 fail-closed.
+  const classifierAccepts = (event: string): boolean => {
+    try {
+      classifyPlanRecovery(authorization, run(event), "main", targetSha);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const event of PLAN_TRIGGER_EVENTS) {
+    assert.deepEqual(classifyPlanRecovery(authorization, run(event), "main", targetSha), { required: false, reason: "NONE" }, event);
+  }
+  const candidates = ["workflow_dispatch", "issues", "issue_comment", "workflow_run", "push", "pull_request", "schedule"];
+  assert.deepEqual(candidates.filter(classifierAccepts), [...PLAN_TRIGGER_EVENTS]);
+  // authorize / handoff handler와 같은 집합이다.
+  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planAuthorizeHandler], candidates.filter(classifierAccepts));
+  assert.deepEqual([...UPSTREAM_EVENT_ACCEPTANCE.planRunAcceptedBy.planImplementHandoffHandler], candidates.filter(classifierAccepts));
 });
 
 test("known divergence (P2, 동작 변경 없음): preflight는 Handoff의 issue_comment(rebind) source를 아직 거부한다", () => {
