@@ -324,6 +324,14 @@ function verifyStagePosition(value: StageProvenancePayload, parent: StageProvena
     if (!isNextStage(parent.stage, value.stage)) {
       throw new Error(`stage order violation: ${parent.stage} -> ${value.stage}`);
     }
+    // SAME_RUN_CONTINUATION은 이름 그대로 parent와 동일한 workflow run의 연속 job이어야 한다.
+    if (value.trigger === "SAME_RUN_CONTINUATION") {
+      for (const field of ["workflowPath", "runId", "runAttempt", "controlPlaneSha"] as const) {
+        if (value.producer[field] !== parent.producer[field]) {
+          throw new Error(`SAME_RUN_CONTINUATION producer.${field} must equal parent producer.${field}`);
+        }
+      }
+    }
   } else {
     // LineageRoot는 PLAN/승인/effective base를 이미 담고 Handoff에서 생성된다.
     // 따라서 chain의 첫 record는 handoff만 허용한다 (worker/bridge로 시작하는 chain은 malformed).

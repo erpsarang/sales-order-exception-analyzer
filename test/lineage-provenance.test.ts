@@ -301,6 +301,45 @@ test("chain: 변조된 parent를 기대값으로 넘겨도 parent digest 자체 
   assert.throws(() => verifyStageProvenance(worker, { root: r, parent: tamperedParent }), /parent lineage stage digest mismatch/);
 });
 
+test("SAME_RUN_CONTINUATION: producer는 parent와 workflowPath/runId/runAttempt/controlPlaneSha가 exact match해야 한다", () => {
+  const r = root();
+  const producer = (workflowPath: string, runId: number) => ({ workflowPath, runId, runAttempt: 1, controlPlaneSha: targetSha });
+  const handoff = handoffStage(r);
+  const worker = createStageProvenance({ root: r, parent: handoff, stage: "worker", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.planImplementWorker.path, 2), subject: { digests: {} } });
+  const bridge = createStageProvenance({ root: r, parent: worker, stage: "bridge", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.planCandidateBridge.path, 3), subject: { digests: {} } });
+  const seal = createStageProvenance({ root: r, parent: bridge, stage: "seal", trigger: "UPSTREAM_COMPLETION", producer: producer(WORKFLOWS.trustedRail.path, 4), subject: { digests: {} } });
+  const publish = createStageProvenance({ root: r, parent: seal, stage: "publish", trigger: "SAME_RUN_CONTINUATION", producer: { ...seal.producer }, subject: { digests: {} } });
+  assert.doesNotThrow(() => verifyStageProvenance(publish, { root: r, parent: seal }));
+
+  const mismatches: Array<[string, Record<string, unknown>]> = [
+    ["runId", { runId: 5 }],
+    ["runAttempt", { runAttempt: 2 }],
+    ["controlPlaneSha", { controlPlaneSha: reboundSha }],
+  ];
+  for (const [field, patch] of mismatches) {
+    const expected = new RegExp(`SAME_RUN_CONTINUATION producer\\.${field} must equal parent`);
+    // create 경로
+    assert.throws(
+      () => createStageProvenance({ root: r, parent: seal, stage: "publish", trigger: "SAME_RUN_CONTINUATION", producer: { ...seal.producer, ...patch } as typeof seal.producer, subject: { digests: {} } }),
+      expected,
+      `create ${field}`,
+    );
+    // digest까지 다시 계산한 forged record
+    const forged = forge(publish, { producer: { ...publish.producer, ...patch } });
+    assert.throws(() => verifyStageProvenance(forged, { root: r, parent: seal }), expected, `verify ${field}`);
+    assert.throws(() => verifyLineageChain(r, [handoff, worker, bridge, seal, forged]), expected, `chain ${field}`);
+  }
+
+  // verify stage(publish의 다음)도 같은 규칙을 따른다
+  const verify = createStageProvenance({ root: r, parent: publish, stage: "verify", trigger: "SAME_RUN_CONTINUATION", producer: { ...publish.producer }, subject: { digests: {} } });
+  assert.throws(
+    () => verifyStageProvenance(forge(verify, { producer: { ...verify.producer, runId: 99 } }), { root: r, parent: publish }),
+    /SAME_RUN_CONTINUATION producer\.runId must equal parent/,
+  );
+  // 다른 trigger에는 적용되지 않는다 (worker는 handoff와 다른 run이 정상)
+  assert.doesNotThrow(() => verifyStageProvenance(worker, { root: r, parent: handoff }));
+});
+
 test("Rail 내부 stage는 SAME_RUN_CONTINUATION으로 handoff → verify 전체 chain을 이룬다", () => {
   const r = root();
   const producer = (workflowPath: string, runId: number) => ({ workflowPath, runId, runAttempt: 1, controlPlaneSha: targetSha });
