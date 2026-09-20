@@ -344,6 +344,11 @@ test("PLAN Worker는 INFRA_FAILURE를 exact stalled marker로 기록한다", () 
   assert.match(workflow, /Trusted Recovery Preflight가 PASS하면 Worker가 자동 재진입합니다/);
 });
 
+test("Trusted PLAN rebind Handoff의 issue_comment source를 downstream에서 허용한다", () => {
+  assert.match(workflow, /!\['workflow_run', 'issue_comment'\]\.includes\(run\.event\)/);
+  assert.match(workerPolicySource, /expectedEvent = bundle\.rebind \? "issue_comment" : "workflow_run"/);
+});
+
 test("RECOVERY_READY는 exact provenance 검증 후 기존 Handoff source로 Worker에 자동 재진입한다", () => {
   assert.match(workflow, /Trusted PLAN IMPLEMENT Handoff.*,.*Trusted Worker Recovery Preflight/);
   assert.match(workflow, /name: RECOVERY_READY artifact 다운로드/);

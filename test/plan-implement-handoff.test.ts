@@ -4,11 +4,14 @@ import { createPlanAuthorizeArtifact, type PlanAuthorizeArtifact } from "../src/
 import {
   createPlanImplementContract,
   createPlanImplementHandoffManifest,
+  createPlanRebindProvenance,
   PLAN_IMPLEMENT_MAX_CONTEXT_BYTES,
   PLAN_IMPLEMENT_MAX_PATCH_BYTES,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
+  validatePlanAuthorizeSourceForRebind,
   verifyPlanAuthorizeArtifact,
+  verifyPlanRebindProvenance,
   type PlanAuthorizeSourceRun,
 } from "../src/self-improvement/plan-implement-handoff.js";
 
@@ -178,6 +181,67 @@ test("package.json companion이 8-file bounded scope를 넘기면 fail-closed �
     () => createPlanImplementContract(approved, canonicalPlanArtifact(saturatedPlan)),
     /package-lock\.json within bounded scope/,
   );
+});
+
+test("Framework-only drift는 기존 Human 승인 PLAN을 current SHA에 trusted rebind한다", () => {
+  const approved = authorization();
+  const reboundTargetSha = "e".repeat(40);
+  const changedPaths = [
+    "src/self-improvement/deterministic-ci.ts",
+    "test/deterministic-ci.test.ts",
+  ];
+  const planValue = canonicalPlanArtifact();
+  const rebind = createPlanRebindProvenance(approved, planValue, reboundTargetSha, changedPaths);
+  assert.doesNotThrow(() => verifyPlanRebindProvenance(rebind, approved));
+  assert.deepEqual(rebind.changedPaths, changedPaths);
+
+  const contract = createPlanImplementContract(approved, planValue, rebind);
+  assert.equal(contract.baseSha, reboundTargetSha);
+
+  const sourceArtifact = {
+    name: "plan-authorize-issue-83-plan-34727609462-attempt-2-approval-5649698571-run-34728260819-attempt-1",
+    id: 10309140730,
+    digest: "f".repeat(64),
+  };
+  const handoff = createPlanImplementHandoffManifest({
+    authorization: approved,
+    sourceArtifact,
+    contract,
+    contextDigest: "1".repeat(64),
+    rebind,
+  });
+  assert.equal(handoff.baseSha, reboundTargetSha);
+  assert.equal(handoff.rebindDigest, rebind.rebindDigest);
+});
+
+test("PLAN rebind는 App drift 또는 승인 Context/Scope와 겹치는 drift를 fail-closed 한다", () => {
+  const approved = authorization();
+  const reboundTargetSha = "e".repeat(40);
+  const planValue = canonicalPlanArtifact();
+
+  assert.throws(
+    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, ["package.json"]),
+    /not framework-only/,
+  );
+  assert.throws(
+    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, [".github/workflows/plan.yml"]),
+    /overlaps approved PLAN context\/scope/,
+  );
+});
+
+test("rebind source는 old approved SHA와 current rebound SHA를 모두 exact 검증한다", () => {
+  const approved = authorization();
+  const reboundTargetSha = "e".repeat(40);
+  assert.doesNotThrow(() => validatePlanAuthorizeSourceForRebind(
+    approved,
+    source({ currentDefaultSha: reboundTargetSha }),
+    reboundTargetSha,
+  ));
+  assert.throws(() => validatePlanAuthorizeSourceForRebind(
+    approved,
+    source({ currentDefaultSha: "f".repeat(40) }),
+    reboundTargetSha,
+  ), /exact current default SHA/);
 });
 
 test("source workflow/run/SHA/default HEAD가 exact approval과 다르면 fail-closed 한다", () => {

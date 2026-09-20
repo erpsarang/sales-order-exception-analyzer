@@ -4,18 +4,27 @@ on:
   workflow_run:
     workflows: ["Trusted PLAN_AUTHORIZE"]
     types: [completed]
+  issue_comment:
+    types: [created]
 
 permissions: {}
 
 jobs:
   handoff:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
-      github.event.workflow_run.event == 'issue_comment'
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+       github.event.workflow_run.event == 'issue_comment') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.action == 'created' &&
+       github.event.issue.state == 'open' &&
+       github.event.issue.pull_request == null &&
+       github.event.comment.body == 'PLAN-재개')
     permissions:
       contents: read
       actions: read
+      issues: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -25,11 +34,105 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            if (context.eventName === 'issue_comment') {
+              const issueNumber = Number(context.payload.issue?.number);
+              if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
+                core.setFailed('PLAN rebind issue number is invalid');
+                return;
+              }
+
+              const defaultBranch = context.payload.repository.default_branch;
+              const { data: branch } = await github.rest.repos.getBranch({
+                ...context.repo,
+                branch: defaultBranch,
+              });
+              if (context.sha !== branch.commit.sha) {
+                core.setFailed('PLAN rebind trusted code is not exact current default branch');
+                return;
+              }
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              const marker = /<!-- self-improvement:PLAN_AUTHORIZE approval-comment=(\d+) run-id=(\d+) run-attempt=(\d+) artifact=([^\s]+) -->/;
+              const candidates = comments
+                .filter((comment) => comment.user?.login === 'github-actions[bot]' && typeof comment.body === 'string')
+                .map((comment) => {
+                  const match = marker.exec(comment.body);
+                  if (!match) return null;
+                  const artifactName = match[4];
+                  const expectedPrefix = `plan-authorize-issue-${issueNumber}-`;
+                  if (!artifactName.startsWith(expectedPrefix)) return null;
+                  return {
+                    commentId: Number(comment.id),
+                    runId: Number(match[2]),
+                    runAttempt: Number(match[3]),
+                    artifactName,
+                  };
+                })
+                .filter(Boolean)
+                .sort((a, b) => b.commentId - a.commentId);
+              if (candidates.length < 1) {
+                core.setFailed('no trusted PLAN_AUTHORIZE marker exists for PLAN rebind');
+                return;
+              }
+              const selected = candidates[0];
+
+              const { data: sourceRun } = await github.rest.actions.getWorkflowRun({
+                ...context.repo,
+                run_id: selected.runId,
+              });
+              if (
+                sourceRun.name !== 'Trusted PLAN_AUTHORIZE' ||
+                sourceRun.path !== '.github/workflows/plan-authorize.yml' ||
+                sourceRun.event !== 'issue_comment' ||
+                sourceRun.status !== 'completed' ||
+                sourceRun.conclusion !== 'success' ||
+                sourceRun.run_attempt !== selected.runAttempt ||
+                sourceRun.head_branch !== defaultBranch
+              ) {
+                core.setFailed('PLAN rebind source PLAN_AUTHORIZE identity mismatch');
+                return;
+              }
+
+              const { data: artifactData } = await github.rest.actions.listWorkflowRunArtifacts({
+                ...context.repo,
+                run_id: selected.runId,
+                per_page: 100,
+              });
+              const exact = artifactData.artifacts.filter(
+                (artifact) =>
+                  !artifact.expired &&
+                  artifact.name === selected.artifactName &&
+                  /^sha256:[0-9a-f]{64}$/.test(artifact.digest || ''),
+              );
+              if (exact.length !== 1) {
+                core.setFailed(`expected one exact PLAN_AUTHORIZE artifact for rebind; actual=${exact.length}`);
+                return;
+              }
+              const artifact = exact[0];
+              core.setOutput('should_run', 'true');
+              core.setOutput('name', artifact.name);
+              core.setOutput('id', String(artifact.id));
+              core.setOutput('digest', artifact.digest);
+              core.setOutput('run_id', String(selected.runId));
+              core.setOutput('run_attempt', String(selected.runAttempt));
+              core.setOutput('control_sha', branch.commit.sha);
+              core.setOutput('rebind_target_sha', branch.commit.sha);
+              return;
+            }
+
             const run = context.payload.workflow_run;
             if (run.path !== '.github/workflows/plan-authorize.yml') {
               core.setFailed(`unexpected source workflow path: ${run.path}`);
               return;
             }
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('run_attempt', String(run.run_attempt));
+            core.setOutput('control_sha', run.head_sha);
+            core.setOutput('rebind_target_sha', '');
 
             const { data } = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner,
@@ -89,7 +192,7 @@ jobs:
         if: steps.source.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ steps.source.outputs.control_sha }}
           persist-credentials: false
           path: control
 
@@ -114,7 +217,7 @@ jobs:
           path: ${{ runner.temp }}/plan-authorize
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.source.outputs.run_id }}
 
       - name: PLAN_AUTHORIZE artifact 구조 확인
         if: steps.source.outputs.should_run == 'true'
@@ -137,8 +240,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
-          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.source.outputs.run_attempt }}
+          REBIND_TARGET_SHA: ${{ steps.source.outputs.rebind_target_sha }}
           SOURCE_ARTIFACT_NAME: ${{ steps.source.outputs.name }}
           SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.id }}
           SOURCE_ARTIFACT_DIGEST: ${{ steps.source.outputs.digest }}

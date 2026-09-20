@@ -5,17 +5,22 @@ import test from "node:test";
 const workflow = readFileSync(".github/workflows/plan-implement-handoff.yml", "utf8");
 const handler = readFileSync("src/self-improvement/plan-implement-handoff-handler.ts", "utf8");
 
-test("handoff는 Trusted PLAN_AUTHORIZE만 source로 사용한다", () => {
+test("handoff는 Trusted PLAN_AUTHORIZE 또는 exact PLAN-재개 rebind만 source로 사용한다", () => {
   assert.match(workflow, /workflows:\s*\["Trusted PLAN_AUTHORIZE"\]/);
+  assert.match(workflow, /issue_comment:\n\s+types: \[created\]/);
+  assert.match(workflow, /github\.event\.comment\.body == 'PLAN-재개'/);
+  assert.match(workflow, /self-improvement:PLAN_AUTHORIZE/);
+  assert.match(workflow, /no trusted PLAN_AUTHORIZE marker exists for PLAN rebind/);
   assert.match(workflow, /run\.path !== '\.github\/workflows\/plan-authorize\.yml'/);
   assert.match(workflow, /workflow_run\.event == 'issue_comment'/);
+  assert.match(workflow, /REBIND_TARGET_SHA:/);
   assert.doesNotMatch(workflow, /workflows:\s*\["Trusted AUTHORIZE"\]/);
   assert.doesNotMatch(workflow, /SI-승인/);
 });
 
 test("handoff workflow는 read-only 권한이고 Worker나 Merge를 실행하지 않는다", () => {
   assert.match(workflow, /permissions:\s*\{\}/);
-  assert.match(workflow, /permissions:\n\s+contents: read\n\s+actions: read/);
+  assert.match(workflow, /permissions:\n\s+contents: read\n\s+actions: read\n\s+issues: read/);
   assert.doesNotMatch(workflow, /contents: write/);
   assert.doesNotMatch(workflow, /issues: write/);
   assert.doesNotMatch(workflow, /pull-requests: write/);
