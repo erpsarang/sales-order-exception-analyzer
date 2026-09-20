@@ -9,6 +9,23 @@ const BOUNDARY_SIGNAL =
 const SOURCE_FRAME =
   /(?:^|[\s(])(?:[^\s():]+\/)*(src\/[A-Za-z0-9._/-]+):\d+:\d+/g;
 
+const NPM_LOCK_SYNC_SIGNAL =
+  /(?:npm ci[\s\S]{0,240}package\.json[\s\S]{0,240}package-lock\.json[\s\S]{0,240}in sync|Missing:\s+[^\r\n]+\s+from lock file)/i;
+
+function dependencyLockBoundaryPaths(validation: DeterministicValidationResult): readonly string[] {
+  for (const command of validation.commands) {
+    if (
+      command.status === "FAIL" &&
+      command.executable === "npm" &&
+      command.args[0] === "ci" &&
+      NPM_LOCK_SYNC_SIGNAL.test(`${command.stdout}\n${command.stderr}`)
+    ) {
+      return ["package-lock.json"];
+    }
+  }
+  return [];
+}
+
 function boundarySourcePaths(validation: DeterministicValidationResult): readonly string[] {
   const found = new Set<string>();
 
@@ -45,7 +62,10 @@ export function classifyRepairEligibility(
     return { allowed: true, reason: "REPAIR_ALLOWED", sourcePaths: [] };
   }
 
-  const sourcePaths = boundarySourcePaths(validation);
+  const sourcePaths = [...new Set([
+    ...boundarySourcePaths(validation),
+    ...dependencyLockBoundaryPaths(validation),
+  ])].sort((a, b) => a.localeCompare(b));
   if (sourcePaths.length === 0) {
     return { allowed: true, reason: "REPAIR_ALLOWED", sourcePaths };
   }
