@@ -217,3 +217,50 @@ test("요구의 npm run script가 가리키는 runtime entrypoint와 direct test
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("npm run source/direct test/package 계약은 큰 relevance 파일의 byte budget보다 먼저 보존된다", () => {
+  const root = mkdtempSync(join(tmpdir(), "planner-npm-byte-reserve-"));
+  try {
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "test"));
+
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      scripts: { analyze: "node --import tsx src/order-analysis-cli.ts" },
+    }));
+    writeFileSync(
+      join(root, "src", "order-analysis-cli.ts"),
+      "export async function runOrderAnalysisCli() { return 'ok'; }\n",
+    );
+    writeFileSync(
+      join(root, "test", "order-analysis-cli.test.ts"),
+      "import { runOrderAnalysisCli } from '../src/order-analysis-cli.js';\nvoid runOrderAnalysisCli;\n",
+    );
+    for (const [name, anchor] of [
+      ["csv-noise.ts", "CSV"],
+      ["excel-noise.ts", "EXCEL"],
+      ["output-noise.ts", "OUTPUT"],
+      ["exception-noise.ts", "EXCEPTION"],
+    ] as const) {
+      writeFileSync(join(root, "src", name), `${anchor} `.repeat(5000));
+    }
+
+    const pack = selectPlanContext(
+      "기존 `npm run analyze -- orders.json`를 유지하고 CSV EXCEL OUTPUT EXCEPTION 요구를 지원한다.",
+      root,
+      "example/orders",
+      "a".repeat(40),
+      { maxFiles: 8, maxBytes: 12_000, maxFileBytes: 4_000 },
+    );
+    const paths = pack.files.map((file) => file.path);
+
+    assert.deepEqual(paths.slice(0, 3), [
+      "src/order-analysis-cli.ts",
+      "test/order-analysis-cli.test.ts",
+      "package.json",
+    ]);
+    assert.ok(pack.totalBytes <= 12_000);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
