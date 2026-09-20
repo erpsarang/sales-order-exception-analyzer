@@ -466,7 +466,26 @@ export function selectPlanContext(
 const boundedString = { type: "string", minLength: 1, maxLength: 1600 };
 const strings = { type: "array", minItems: 1, maxItems: 8, items: boundedString };
 const optionalStrings = { type: "array", maxItems: 8, items: boundedString };
-const pathStrings = { type: "array", maxItems: 8, items: { type: "string", minLength: 1, maxLength: 500 } };
+/**
+ * implementationScope.allowedPaths의 structured-output 단계 조기 차단용 pattern.
+ * repository root 기준 상대경로만 허용한다: 절대경로(/..., C:\...), backslash, "." / ".." segment,
+ * 빈 segment, trailing slash, wildcard를 모두 거부한다.
+ * trusted validator(assertSafePlanPath)보다 느슨하지 않다. validator는 그대로 최종 fail-closed 경계다.
+ * (lookahead 없이 작성해 JSON Schema pattern 구현 차이에 의존하지 않는다.)
+ */
+export const PLAN_ALLOWED_PATH_PATTERN =
+  "^\\.?[A-Za-z0-9_-][A-Za-z0-9._-]*(/\\.?[A-Za-z0-9_-][A-Za-z0-9._-]*)*$";
+const pathStrings = {
+  type: "array",
+  maxItems: 8,
+  items: {
+    type: "string",
+    minLength: 1,
+    maxLength: 500,
+    pattern: PLAN_ALLOWED_PATH_PATTERN,
+    description: "repository root 기준 상대경로. 예: package.json, src/order-csv.ts. 절대경로(/home/..., /tmp/..., C:\\...)와 ./ ../ 는 금지.",
+  },
+};
 export const PLAN_SCHEMA = {
   type: "object", additionalProperties: false,
   required: ["summary", "analysis", "approach", "changeCandidates", "acceptanceCriteria", "testStrategy", "questions", "implementationScope"],
@@ -558,7 +577,13 @@ analysis에는 Context Pack이 발급한 evidenceId만 사용하세요. path나 
 approach: 구현 접근, changeCandidates: 변경 후보 경로와 이유, acceptanceCriteria: 관찰 가능한 완료조건,
 testStrategy: 기존 문맥에서 확인 가능한 테스트와 추가할 테스트 및 실행 방법, questions: IMPLEMENT 범위 또는 검증 방법을 확정하지 못하게 하는 blocking question만 작성하세요. 비차단 확인/참고 사항은 questions에 넣지 말고 approach 또는 testStrategy에 검증 방법으로 반영하세요.
 implementationScope는 IMPLEMENT에 넘길 machine-actionable 제안입니다. exact path만 사용하고 wildcard/placeholder를 쓰지 마세요.
-기존 파일을 allowedPaths에 넣으려면 반드시 Context Pack에서 본 path여야 합니다. 필요한 신규 파일은 exact safe path로 제안할 수 있습니다.
+여기서 exact path는 filesystem 절대경로가 아니라 repository root 기준 상대경로(repository-relative path)를 뜻합니다.
+implementationScope.allowedPaths 규칙:
+- 모든 allowedPaths는 repository root 기준 상대경로입니다. 예: package.json, src/order-analysis-cli.ts, src/web-main.ts
+- 절대경로는 금지입니다. /home/..., /tmp/..., runner workspace 경로, plan-neutral, PLAN_TARGET, 현재 작업 디렉터리 등 filesystem 실제 위치를 경로에 쓰지 마세요. '/'로 시작하거나 드라이브 문자(C:\\)로 시작하면 안 됩니다.
+- './' 또는 '../' 로 시작하는 경로, backslash, 끝의 '/', 디렉터리 경로, wildcard도 금지입니다.
+- 기존 파일을 allowedPaths에 넣으려면 반드시 Context Pack에서 본 파일이어야 하며, Context Pack의 path 값을 글자 그대로 사용하세요.
+- 필요한 신규 파일도 같은 형식의 repository-relative exact path로만 제안하세요. 예: src/order-csv.ts, test/order-csv.test.ts, index.html
 validationCommands는 'npm test', 'npm run build' 중 필요한 것만 사용하세요. budget 값은 AI가 정하지 않습니다.
 구현 범위와 검증 방법을 확정할 수 있고 blocking questions가 하나도 없을 때만 implementationScope.ready=true로 하세요.
 implementationScope.ready=true이면 questions는 반드시 빈 배열 []이어야 합니다.
