@@ -3,8 +3,10 @@ name: Semantic REVIEW
 on:
   workflow_call:
     secrets:
+      FRAMEWORK_CODEX_API_KEY:
+        required: false
       APP_CODEX_API_KEY:
-        required: true
+        required: false
     outputs:
       decision:
         description: Structured semantic review decision
@@ -309,9 +311,10 @@ jobs:
 
       - name: Untrusted read-only Semantic Reviewer
         id: semantic_reviewer
-        uses: openai/codex-action@v1
+        timeout-minutes: 4
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           allow-bot-users: "github-actions[bot]"
           safety-strategy: drop-sudo
@@ -320,9 +323,8 @@ jobs:
           prompt-file: ${{ runner.temp }}/review-input/review-prompt.md
           output-schema-file: ${{ runner.temp }}/review-input/review-output.schema.json
           output-file: ${{ runner.temp }}/reviewer/reviewer.json
-          model: gpt-5.6-terra
           effort: medium
-          codex-args: '["--json","-c","project_doc_max_bytes=0"]'
+          codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: Reviewer output 최소 구조 확인
         shell: bash
@@ -334,13 +336,6 @@ jobs:
           fi
           node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "${RUNNER_TEMP}/reviewer/reviewer.json"
 
-      - name: persisted Semantic Reviewer rollout artifact 저장
-        uses: actions/upload-artifact@v4
-        with:
-          name: semantic-review-rollout-issue-${{ needs.review_prepare.outputs.issue_number }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/semantic-review-codex-home/sessions
-          if-no-files-found: error
-
       - name: untrusted Reviewer output artifact 저장
         uses: actions/upload-artifact@v4
         with:
@@ -348,67 +343,12 @@ jobs:
           path: ${{ runner.temp }}/reviewer/reviewer.json
           if-no-files-found: error
 
-  review_usage:
-    name: trusted Semantic REVIEW usage ledger
+  review_finalize:
+    name: trusted REVIEW provenance 기록
     needs: [review_prepare, review_agent]
     if: >-
       needs.review_prepare.result == 'success' &&
       needs.review_agent.result == 'success'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-latest
-    outputs:
-      total_tokens: ${{ steps.usage.outputs.total_tokens }}
-      artifact_name: ${{ steps.usage.outputs.artifact_name }}
-
-    steps:
-      - name: trusted usage control-plane checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: persisted Semantic Reviewer rollout artifact 다운로드
-        uses: actions/download-artifact@v4
-        with:
-          name: semantic-review-rollout-issue-${{ needs.review_prepare.outputs.issue_number }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/semantic-review-codex-home/sessions
-
-      - name: Node 설정
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: trusted usage parser 의존성 설치
-        run: npm ci
-
-      - name: Codex persisted token usage exact 기록
-        id: usage
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/semantic-review-codex-home
-          AI_USAGE_STAGE: semantic-review
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: isolated AI Semantic Reviewer
-          AI_USAGE_JSON: ${{ runner.temp }}/semantic-review-usage.json
-
-      - name: trusted AI usage artifact 저장
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/semantic-review-usage.json
-          if-no-files-found: error
-
-  review_finalize:
-    name: trusted REVIEW provenance 기록
-    needs: [review_prepare, review_agent, review_usage]
-    if: >-
-      needs.review_prepare.result == 'success' &&
-      needs.review_agent.result == 'success' &&
-      needs.review_usage.result == 'success'
     permissions:
       contents: read
       actions: read

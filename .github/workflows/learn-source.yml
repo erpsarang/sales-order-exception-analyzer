@@ -23,10 +23,6 @@ on:
         description: Exact orchestration provenance artifact name
         required: true
         type: string
-      business_evidence_issue_number:
-        description: Optional same-repository User/Business Feedback Issue number
-        required: false
-        type: string
 
 permissions: {}
 
@@ -68,12 +64,6 @@ jobs:
 
       - name: trusted source 의존성 설치
         run: npm ci --ignore-scripts
-
-      - name: deterministic App Runtime Evidence 생성
-        run: npm exec -- tsx src/app-evidence-handler.ts
-        env:
-          APP_EVIDENCE_OUTPUT: ${{ runner.temp }}/learn-source/app-evidence.json
-          APP_EVIDENCE_SOURCE_SHA: ${{ github.sha }}
 
       - name: exact GitHub cycle facts와 source artifact 선택
         id: freeze
@@ -200,52 +190,6 @@ jobs:
             core.setOutput('source_run_id', runId);
             core.setOutput('orchestration_artifact_name', artifact.name);
 
-      - name: selected Business Feedback Issue 고정
-        uses: actions/github-script@v7
-        env:
-          BUSINESS_ISSUE: ${{ inputs.business_evidence_issue_number }}
-        with:
-          script: |
-            const fs = require('node:fs');
-            const path = require('node:path');
-            const { createHash } = require('node:crypto');
-            const raw = process.env.BUSINESS_ISSUE || '';
-            if (!raw.trim()) {
-              core.notice('No Business Feedback Issue selected; business evidence omitted');
-              return;
-            }
-            if (!/^[1-9]\d*$/.test(raw)) throw new Error('business_evidence_issue_number must be a positive integer');
-            const issueNumber = Number(raw);
-            if (!Number.isSafeInteger(issueNumber)) throw new Error('business_evidence_issue_number must be a safe integer');
-
-            const { data: issue } = await github.rest.issues.get({
-              ...context.repo,
-              issue_number: issueNumber,
-            });
-            if (issue.pull_request) throw new Error('Business Evidence must reference an Issue, not a PR');
-            if (!issue.title?.trim() || !issue.body?.trim()) {
-              throw new Error('Business Evidence Issue requires non-empty title/body');
-            }
-            const titleBodyDigest = createHash('sha256')
-              .update(JSON.stringify([issue.title, issue.body]), 'utf8')
-              .digest('hex');
-            const evidence = {
-              schemaVersion: 1,
-              kind: 'repository-business-feedback',
-              repository: `${context.repo.owner}/${context.repo.repo}`,
-              issueNumber: issue.number,
-              title: issue.title,
-              body: issue.body,
-              titleBodyDigest,
-            };
-            const outputDir = path.join(process.env.RUNNER_TEMP, 'learn-source');
-            fs.mkdirSync(outputDir, { recursive: true });
-            fs.writeFileSync(
-              path.join(outputDir, 'business-evidence.json'),
-              `${JSON.stringify(evidence, null, 2)}\n`,
-              'utf8',
-            );
-
       - name: exact orchestration provenance 다운로드
         uses: actions/download-artifact@v4
         with:
@@ -273,11 +217,6 @@ jobs:
           LEARN_SOURCE_FACTS_JSON: ${{ runner.temp }}/learn-source/facts.json
           ORCHESTRATION_JSON: ${{ runner.temp }}/learn-source/orchestration.json
           LEARN_SOURCE_OUTPUT_DIR: ${{ runner.temp }}/learn-source/output
-          APP_EVIDENCE_JSON: ${{ runner.temp }}/learn-source/app-evidence.json
-          APP_EVIDENCE_SOURCE_SHA: ${{ github.sha }}
-          APP_EVIDENCE_SOURCE_RUN_ID: ${{ github.run_id }}
-          APP_EVIDENCE_SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          BUSINESS_EVIDENCE_JSON: ${{ runner.temp }}/learn-source/business-evidence.json
 
       - name: Completed Cycle Record 저장
         id: upload_completed

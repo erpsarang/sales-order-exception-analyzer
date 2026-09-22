@@ -219,7 +219,7 @@ jobs:
         timeout-minutes: 3
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           allow-bot-users: "github-actions[bot]"
           safety-strategy: drop-sudo
@@ -228,7 +228,6 @@ jobs:
           prompt-file: ${{ runner.temp }}/learn-request/learn-prompt.md
           output-schema-file: ${{ runner.temp }}/learn-request/learn-output.schema.json
           output-file: ${{ runner.temp }}/learner-output/learner.json
-          model: gpt-5.6-luna
           effort: medium
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
@@ -244,40 +243,6 @@ jobs:
         with:
           name: learner-output-issue-${{ needs.prepare.outputs.issue_number }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/learner-output/learner.json
-          if-no-files-found: error
-
-      - name: trusted usage parser checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          token: ${{ github.token }}
-          persist-credentials: false
-
-      - name: Node 설정
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: trusted usage parser 의존성 설치
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted LEARN usage exact 기록
-        id: usage
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/learn-codex-home
-          AI_USAGE_STAGE: learn
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: learner
-          AI_USAGE_JSON: ${{ runner.temp }}/learn-usage/learn-usage.json
-
-      - name: trusted LEARN usage artifact 저장
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/learn-usage/learn-usage.json
           if-no-files-found: error
 
   finalize:
@@ -404,7 +369,7 @@ jobs:
           LEARN_INPUT_ARTIFACT_DIGEST: ${{ steps.source.outputs.input_artifact_digest }}
           LEARNER_PROVIDER: OpenAI
           LEARNER_ACTION: openai/codex-action@v1
-          LEARNER_MODEL: gpt-5.6-luna
+          LEARNER_MODEL: action-default
           LEARNER_REASONING_EFFORT: medium
 
       - name: validated untrusted LEARN report 저장

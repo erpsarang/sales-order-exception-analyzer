@@ -11,10 +11,8 @@ import {
   createPlanImplementHandoffManifest,
   planImplementHandoffArtifactName,
   verifyPlanAuthorizeArtifact,
-  verifyPlanRebindProvenance,
   type PlanAuthorizeArtifactMetadata,
   type PlanImplementHandoffManifest,
-  type PlanRebindProvenance,
 } from "./plan-implement-handoff.js";
 import type { PlanAuthorizeArtifact } from "./plan-authorization.js";
 import {
@@ -26,17 +24,9 @@ import {
 
 export const PLAN_IMPLEMENT_HANDOFF_WORKFLOW_NAME = "Trusted PLAN IMPLEMENT Handoff" as const;
 export const PLAN_IMPLEMENT_HANDOFF_WORKFLOW_PATH = ".github/workflows/plan-implement-handoff.yml" as const;
-export const PLAN_IMPLEMENT_WORKER_WORKFLOW_NAME = "PLAN Bounded IMPLEMENT Worker" as const;
-export const PLAN_IMPLEMENT_WORKER_WORKFLOW_PATH = ".github/workflows/plan-implement-worker.yml" as const;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
-
-export const PLAN_IMPLEMENT_AI_CALL_STAGE = "plan-bounded-implement-attempt0-v1" as const;
-export const PLAN_IMPLEMENT_CODEX_ACTION_PIN = "52fe01ec70a42f454c9d2ebd47598f9fd6893d56" as const;
-export const PLAN_IMPLEMENT_CODEX_MODEL = "gpt-5.6-terra" as const;
-export const PLAN_IMPLEMENT_CODEX_EFFORT = "low" as const;
-export const PLAN_IMPLEMENT_CODEX_ARGS = '["-c","project_doc_max_bytes=0"]' as const;
 
 export interface HandoffArtifactMetadata {
   readonly name: string;
@@ -70,7 +60,6 @@ export interface PlanImplementWorkerBundle {
   readonly handoff: PlanImplementHandoffManifest;
   readonly authorization: PlanAuthorizeArtifact;
   readonly sourcePlanAuthorizeArtifact: PlanAuthorizeArtifactMetadata;
-  readonly rebind?: PlanRebindProvenance;
   readonly prompt: string;
 }
 
@@ -136,20 +125,15 @@ function parsePlanAuthorizeArtifactMetadata(value: unknown): PlanAuthorizeArtifa
 function verifySourceRecord(value: unknown): {
   authorization: PlanAuthorizeArtifact;
   sourceArtifact: PlanAuthorizeArtifactMetadata;
-  rebind?: PlanRebindProvenance;
 } {
   if (!record(value)) throw new Error("handoff source record must be an object");
-  const hasRebind = value.rebind !== undefined;
-  const expectedKeys = hasRebind ? ["authorization", "rebind", "sourceArtifact"] : ["authorization", "sourceArtifact"];
+  const expectedKeys = ["authorization", "sourceArtifact"];
   if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)) {
     throw new Error("handoff source record shape is invalid");
   }
-  const authorization = verifyPlanAuthorizeArtifact(value.authorization);
-  const rebind = hasRebind ? verifyPlanRebindProvenance(value.rebind, authorization) : undefined;
   return {
-    authorization,
+    authorization: verifyPlanAuthorizeArtifact(value.authorization),
     sourceArtifact: parsePlanAuthorizeArtifactMetadata(value.sourceArtifact),
-    ...(rebind ? { rebind } : {}),
   };
 }
 
@@ -167,9 +151,8 @@ export function verifyPlanImplementWorkerBundle(input: {
   verifyImplementContextPack(context, contract);
 
   const source = verifySourceRecord(input.source);
-  const expectedBaseSha = source.rebind?.reboundTargetSha ?? source.authorization.targetSha;
-  if (source.authorization.repository !== contract.repository || expectedBaseSha !== contract.baseSha) {
-    throw new Error("handoff source authorization/rebind is not bound to contract identity");
+  if (source.authorization.repository !== contract.repository || source.authorization.targetSha !== contract.baseSha) {
+    throw new Error("handoff source authorization is not bound to contract identity");
   }
 
   const expectedHandoff = createPlanImplementHandoffManifest({
@@ -177,7 +160,6 @@ export function verifyPlanImplementWorkerBundle(input: {
     sourceArtifact: source.sourceArtifact,
     contract,
     contextDigest: context.contextDigest,
-    ...(source.rebind ? { rebind: source.rebind } : {}),
   });
   if (!record(input.handoff) || JSON.stringify(input.handoff) !== JSON.stringify(expectedHandoff)) {
     throw new Error("handoff manifest mismatch");
@@ -197,7 +179,6 @@ export function verifyPlanImplementWorkerBundle(input: {
     handoff: expectedHandoff,
     authorization: source.authorization,
     sourcePlanAuthorizeArtifact: source.sourceArtifact,
-    ...(source.rebind ? { rebind: source.rebind } : {}),
     prompt: expectedPrompt,
   };
 }
@@ -216,9 +197,8 @@ export function validatePlanImplementWorkerSource(
   if (source.workflowName !== PLAN_IMPLEMENT_HANDOFF_WORKFLOW_NAME || source.workflowPath !== PLAN_IMPLEMENT_HANDOFF_WORKFLOW_PATH) {
     throw new Error("unexpected source handoff workflow");
   }
-  const expectedEvent = bundle.rebind ? "issue_comment" : "workflow_run";
-  if (source.event !== expectedEvent || source.conclusion !== "success") {
-    throw new Error(`source handoff run is not a successful ${expectedEvent}`);
+  if (source.event !== "workflow_run" || source.conclusion !== "success") {
+    throw new Error("source handoff run is not a successful workflow_run");
   }
   if (source.headBranch !== source.defaultBranch) throw new Error("source handoff is not on the default branch");
   if (!GIT_SHA.test(source.headSha) || !GIT_SHA.test(source.currentDefaultSha)) throw new Error("invalid source handoff SHA");
@@ -235,48 +215,6 @@ export function validatePlanImplementWorkerSource(
   if (sourceArtifact.name !== planImplementHandoffArtifactName(bundle.authorization)) {
     throw new Error("source handoff artifact name mismatch");
   }
-}
-
-export function planImplementAiCallId(input: {
-  readonly bundle: PlanImplementWorkerBundle;
-  readonly source: PlanImplementWorkerSourceRun;
-  readonly sourceArtifact: HandoffArtifactMetadata;
-}): string {
-  positiveInteger("source handoff run id", input.source.id);
-  positiveInteger("source handoff run attempt", input.source.runAttempt);
-  positiveInteger("source handoff artifact id", input.sourceArtifact.id);
-  assertDigest("source handoff artifact digest", input.sourceArtifact.digest);
-
-  const promptDigest = createHash("sha256").update(input.bundle.prompt, "utf8").digest("hex");
-  const schemaDigest = createHash("sha256").update(JSON.stringify(WORKER_OUTPUT_SCHEMA), "utf8").digest("hex");
-  const payload = {
-    schemaVersion: 1,
-    kind: "plan-bounded-implement-ai-call",
-    stage: PLAN_IMPLEMENT_AI_CALL_STAGE,
-    repository: input.bundle.contract.repository,
-    issueNumber: input.bundle.authorization.requirement.issueNumber,
-    baseSha: input.bundle.contract.baseSha,
-    sourceHandoff: {
-      runId: input.source.id,
-      runAttempt: input.source.runAttempt,
-      artifact: { ...input.sourceArtifact },
-    },
-    contractDigest: input.bundle.contract.contractDigest,
-    contextDigest: input.bundle.context.contextDigest,
-    handoffDigest: input.bundle.handoff.handoffDigest,
-    promptDigest,
-    schemaDigest,
-    actionPin: PLAN_IMPLEMENT_CODEX_ACTION_PIN,
-    model: PLAN_IMPLEMENT_CODEX_MODEL,
-    effort: PLAN_IMPLEMENT_CODEX_EFFORT,
-    codexArgs: PLAN_IMPLEMENT_CODEX_ARGS,
-  };
-  return createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
-}
-
-export function workerAiCallLedgerArtifactName(aiCallId: string): string {
-  assertDigest("AI call id", aiCallId);
-  return `bounded-worker-ai-call-${aiCallId}`;
 }
 
 export function workerCandidateArtifactName(input: {

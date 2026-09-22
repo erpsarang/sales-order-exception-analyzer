@@ -107,78 +107,20 @@ jobs:
                 ? new Set(['workflow_run', 'workflow_dispatch'])
                 : new Set(['workflow_dispatch']);
 
-              const defaultBranch = context.payload.repository.default_branch;
-              const { data: currentBranch } = await github.rest.repos.getBranch({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                branch: defaultBranch,
-              });
-              const currentDefaultSha = currentBranch.commit.sha;
-              if (context.ref !== `refs/heads/${defaultBranch}` || context.sha !== currentDefaultSha) {
-                core.setFailed('Trusted Rail recovery code is not exact current default branch');
-                return;
-              }
-
               if (
                 !run ||
                 run.status !== 'completed' ||
                 run.conclusion !== 'success' ||
                 run.path !== expectedPath ||
                 !expectedEvents.has(run.event) ||
-                run.head_branch !== defaultBranch ||
+                run.head_branch !== context.payload.repository.default_branch ||
+                run.head_sha !== context.sha ||
                 run.run_attempt !== runAttempt
               ) {
                 core.setFailed(
                   `invalid explicit ${sourceKind} source: status=${run?.status}, conclusion=${run?.conclusion}, path=${run?.path}, event=${run?.event}, head=${run?.head_branch}, sha=${run?.head_sha}, attempt=${run?.run_attempt}`,
                 );
                 return;
-              }
-
-              if (sourceKind === 'FIX' && run.head_sha !== currentDefaultSha) {
-                core.setFailed('FIX recovery requires exact current default SHA');
-                return;
-              }
-
-              if (sourceKind === 'PLAN_BRIDGE' && run.head_sha !== currentDefaultSha) {
-                const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  basehead: `${run.head_sha}...${currentDefaultSha}`,
-                  per_page: 100,
-                });
-                const files = comparison.files;
-                const allowedFiles = new Set([
-                  '.github/workflows/trusted-rail.yml',
-                  '.github/workflows/semantic-review.yml',
-                  'test/plan-trusted-rail-recovery-source.test.ts',
-                  'test/review-workflow.test.ts',
-                ]);
-                if (
-                  !['ahead', 'identical'].includes(comparison.status) ||
-                  comparison.merge_base_commit.sha !== run.head_sha ||
-                  !Array.isArray(files) ||
-                  files.length > 8
-                ) {
-                  core.setFailed('PLAN_BRIDGE recovery drift is not a bounded ancestor diff');
-                  return;
-                }
-                const rejected = files.filter(
-                  (file) =>
-                    !['added', 'modified'].includes(file.status) ||
-                    !allowedFiles.has(file.filename) ||
-                    file.previous_filename,
-                );
-                if (rejected.length > 0) {
-                  core.setFailed(
-                    `PLAN_BRIDGE recovery requires fresh PLAN; non-approved drift: ${rejected
-                      .map((file) => `${file.status}:${file.filename}`)
-                      .join(',')}`,
-                  );
-                  return;
-                }
-                core.info(
-                  `PLAN_BRIDGE framework-only recovery accepted: source=${run.head_sha}, current=${currentDefaultSha}, files=${files.length}`,
-                );
               }
             } else {
               run = context.payload.workflow_run;

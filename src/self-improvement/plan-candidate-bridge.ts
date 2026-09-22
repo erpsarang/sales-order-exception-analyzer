@@ -6,9 +6,7 @@ import {
 import {
   planImplementHandoffArtifactName,
   verifyPlanAuthorizeArtifact,
-  verifyPlanRebindProvenance,
   type PlanAuthorizeArtifactMetadata,
-  type PlanRebindProvenance,
 } from "./plan-implement-handoff.js";
 import {
   workerCandidateArtifactName,
@@ -86,7 +84,6 @@ export interface PlanCandidateBridgePayload {
     readonly artifact: PlanAuthorizeArtifactMetadata;
     readonly authorization: PlanAuthorizeArtifact;
   };
-  readonly rebind?: PlanRebindProvenance;
   readonly sourceHandoff: {
     readonly runId: number;
     readonly runAttempt: number;
@@ -381,7 +378,6 @@ function bridgePayload(value: PlanCandidateBridgeProvenance): PlanCandidateBridg
       artifact: { ...value.sourcePlanAuthorize.artifact },
       authorization: value.sourcePlanAuthorize.authorization,
     },
-    ...(value.rebind ? { rebind: value.rebind } : {}),
     sourceHandoff: {
       runId: value.sourceHandoff.runId,
       runAttempt: value.sourceHandoff.runAttempt,
@@ -481,7 +477,6 @@ export function createPlanCandidateBridgeProvenance(input: {
       artifact: { ...input.bundle.sourcePlanAuthorizeArtifact },
       authorization: input.bundle.authorization,
     },
-    ...(input.bundle.rebind ? { rebind: input.bundle.rebind } : {}),
     sourceHandoff: {
       runId: input.handoffSource.id,
       runAttempt: input.handoffSource.runAttempt,
@@ -522,9 +517,6 @@ export function verifyPlanCandidateBridgeProvenance(value: unknown): PlanCandida
   if (value.recoveryGuard !== undefined && !record(value.recoveryGuard)) {
     throw new Error("PLAN candidate bridge recovery guard shape is invalid");
   }
-  if (value.rebind !== undefined && !record(value.rebind)) {
-    throw new Error("PLAN candidate bridge rebind shape is invalid");
-  }
   if (typeof value.repository !== "string" || !/^[^/]+\/[^/]+$/.test(value.repository)) throw new Error("bridge repository invalid");
   positiveInteger("bridge issueNumber", value.issueNumber);
   assertSha("bridge baseSha", value.baseSha);
@@ -545,12 +537,10 @@ export function verifyPlanCandidateBridgeProvenance(value: unknown): PlanCandida
     `-run-${authorization.authorization.runId}-attempt-${authorization.authorization.runAttempt}`;
   if (authArtifact.name !== expectedAuthName) throw new Error("bridge PLAN_AUTHORIZE artifact name mismatch");
 
-  const rebind = provenance.rebind ? verifyPlanRebindProvenance(provenance.rebind, authorization) : undefined;
-  const expectedBaseSha = rebind?.reboundTargetSha ?? authorization.targetSha;
   if (
     provenance.repository !== authorization.repository ||
     provenance.issueNumber !== authorization.requirement.issueNumber ||
-    provenance.baseSha !== expectedBaseSha ||
+    provenance.baseSha !== authorization.targetSha ||
     provenance.requirement.issueNumber !== authorization.requirement.issueNumber ||
     provenance.requirement.digest !== authorization.requirement.digest ||
     requirementDigest(provenance.requirement.title, provenance.requirement.body) !== provenance.requirement.digest ||

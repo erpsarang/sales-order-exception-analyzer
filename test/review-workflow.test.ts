@@ -5,8 +5,7 @@ import test from "node:test";
 const trustedRail = await readFile(".github/workflows/trusted-rail.yml", "utf8");
 const reviewWorkflow = await readFile(".github/workflows/semantic-review.yml", "utf8");
 const prepareSection = reviewWorkflow.split("\n  review_prepare:\n")[1]?.split("\n  review_agent:\n")[0] ?? "";
-const agentSection = reviewWorkflow.split("\n  review_agent:\n")[1]?.split("\n  review_usage:\n")[0] ?? "";
-const usageSection = reviewWorkflow.split("\n  review_usage:\n")[1]?.split("\n  review_finalize:\n")[0] ?? "";
+const agentSection = reviewWorkflow.split("\n  review_agent:\n")[1]?.split("\n  review_finalize:\n")[0] ?? "";
 const finalizeSection = reviewWorkflow.split("\n  review_finalize:\n")[1] ?? "";
 
 test("Trusted Rail은 VERIFY 성공 뒤 Semantic REVIEW reusable workflow를 동기 호출한다", () => {
@@ -18,23 +17,20 @@ test("Trusted Rail은 VERIFY 성공 뒤 Semantic REVIEW reusable workflow를 동
   assert.match(reviewWorkflow, /workflow_call:/);
 });
 
-test("REVIEW는 trusted prepare → isolated AI reviewer → trusted usage ledger → trusted finalize로 runner를 분리한다", () => {
+test("REVIEW는 trusted prepare → isolated AI reviewer → trusted finalize로 runner를 분리한다", () => {
   assert.match(reviewWorkflow, /\n  review_prepare:\n/);
   assert.match(reviewWorkflow, /\n  review_agent:\n/);
-  assert.match(reviewWorkflow, /\n  review_usage:\n/);
   assert.match(reviewWorkflow, /\n  review_finalize:\n/);
   assert.match(agentSection, /needs: review_prepare/);
-  assert.match(usageSection, /needs: \[review_prepare, review_agent\]/);
-  assert.match(finalizeSection, /needs: \[review_prepare, review_agent, review_usage\]/);
-  assert.match(finalizeSection, /needs\.review_usage\.result == 'success'/);
+  assert.match(finalizeSection, /needs: \[review_prepare, review_agent\]/);
+  assert.match(finalizeSection, /needs\.review_agent\.result == 'success'/);
 });
 
 test("trusted REVIEW prepare/finalize는 read-only이며 reviewer에도 write 권한이 없다", () => {
   assert.match(prepareSection, /permissions:\n      contents: read\n      actions: read/);
   assert.match(agentSection, /permissions:\n      contents: read/);
   assert.match(finalizeSection, /permissions:\n      contents: read\n      actions: read/);
-  assert.match(usageSection, /permissions:\n      contents: read\n      actions: read/);
-  for (const section of [prepareSection, agentSection, usageSection, finalizeSection]) {
+  for (const section of [prepareSection, agentSection, finalizeSection]) {
     assert.doesNotMatch(section, /contents: write|pull-requests: write|issues: write/);
   }
 });
@@ -64,24 +60,8 @@ test("Semantic REVIEW는 AI 호출 전에 bounded patch를 만들고 full checko
   assert.match(agentSection, /review-neutral\/review-context\/patch\.diff/);
   assert.match(agentSection, /rm -rf review-target/);
   assert.match(agentSection, /test ! -e review-target/);
-  assert.match(agentSection, /model: gpt-5\.6-terra/);
   assert.match(agentSection, /effort: medium/);
   assert.doesNotMatch(agentSection, /effort: high/);
-});
-
-test("Semantic REVIEW는 persisted Codex rollout을 trusted artifact usage로 기록한다", () => {
-  assert.match(agentSection, /codex-args: '\["--json","-c","project_doc_max_bytes=0"\]'/);
-  assert.match(agentSection, /semantic-review-codex-home\/sessions/);
-  assert.match(agentSection, /semantic-review-rollout-issue-/);
-  assert.match(usageSection, /persisted Semantic Reviewer rollout artifact 다운로드/);
-  assert.match(usageSection, /semantic-review-rollout-issue-/);
-  assert.match(usageSection, /ai-usage-rollout-handler\.ts/);
-  assert.match(usageSection, /CODEX_HOME_PATH:/);
-  assert.match(usageSection, /AI_USAGE_JOB_NAME: isolated AI Semantic Reviewer/);
-  assert.match(usageSection, /AI_USAGE_STAGE: semantic-review/);
-  assert.match(usageSection, /ai-usage-/);
-  assert.doesNotMatch(usageSection, /actions\/jobs\/.*\/logs|CODEX_JOB_LOG|ai-usage-handler\.ts/);
-  assert.doesNotMatch(usageSection, /openai-api-key|codex-action/);
 });
 
 test("reviewer는 target project code를 실행하지 않고 structured output schema를 사용한다", () => {
