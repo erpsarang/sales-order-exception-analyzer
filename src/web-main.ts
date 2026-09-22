@@ -1,6 +1,7 @@
 import "./web-styles.css";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import { createExceptionCsv, parseCsvOrders, validateOrders } from "./order-csv.js";
+import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
 
 const fileInput = document.querySelector<HTMLInputElement>("#csv-file")!;
 const analyzeButton = document.querySelector<HTMLButtonElement>("#analyze-button")!;
@@ -11,6 +12,38 @@ const exceptionTable = document.querySelector<HTMLTableElement>("#exception-tabl
 const tableBody = exceptionTable.querySelector("tbody")!;
 const emptyMessage = document.querySelector<HTMLElement>("#empty-message")!;
 let exceptionCsv = "";
+
+const statistics = document.createElement("dl");
+statistics.className = "exception-statistics";
+function statistic(label: string): HTMLElement {
+  const group = document.createElement("div");
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const value = document.createElement("dd");
+  group.append(term, value);
+  statistics.append(group);
+  return value;
+}
+const exceptionRateValue = statistic("예외율");
+const reasonCountsValue = statistic("예외 사유별 건수");
+const topReasonValue = statistic("최다 사유");
+resultSection.prepend(statistics);
+
+function renderSummary(display: OrderSummaryDisplay): void {
+  exceptionRateValue.textContent = display.exceptionRateText;
+  topReasonValue.textContent = display.topReasonText;
+  if (display.reasonCounts.length === 0) {
+    reasonCountsValue.textContent = display.reasonCountsText;
+    return;
+  }
+  const list = document.createElement("ul");
+  for (const reason of display.reasonCounts) {
+    const item = document.createElement("li");
+    item.textContent = reason.text;
+    list.append(item);
+  }
+  reasonCountsValue.replaceChildren(list);
+}
 
 function setText(selector: string, value: number): void {
   document.querySelector<HTMLElement>(selector)!.textContent = String(value);
@@ -47,6 +80,7 @@ analyzeButton.addEventListener("click", async () => {
     setText("#total-count", batch.summary.totalCount);
     setText("#ready-count", batch.summary.shipReadyCount);
     setText("#exception-count", batch.summary.exceptionCount);
+    renderSummary(formatOrderSummary(batch.summary));
     tableBody.replaceChildren();
     for (const item of batch.exceptionWorklist) {
       const order = orders[item.resultIndex]!;
