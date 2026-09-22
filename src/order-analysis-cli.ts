@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import { createExceptionCsv, parseCsvOrders, validateOrders } from "./order-csv.js";
 import type { OrderInput } from "./order-analysis.js";
+import { formatOrderSummary } from "./order-summary.js";
 
 export async function runOrderAnalysisCli(args: string[]): Promise<string> {
   let filePath: string;
@@ -26,7 +27,14 @@ export async function runOrderAnalysisCli(args: string[]): Promise<string> {
   if (csvPath) {
     try { await writeFile(csvPath, createExceptionCsv(orders, batch), "utf8"); } catch { throw new Error(`CSV 파일을 저장할 수 없습니다: ${JSON.stringify(csvPath)}. 경로와 쓰기 권한을 확인하세요.`); }
   }
-  const lines = [`주문 분석: 전체 ${batch.summary.totalCount}건 / 정상 ${batch.summary.shipReadyCount}건 / 예외 ${batch.summary.exceptionCount}건`, "주문별 결과 (입력 순서):"];
+  const summaryDisplay = formatOrderSummary(batch.summary);
+  const lines = [
+    `주문 분석: 전체 ${batch.summary.totalCount}건 / 정상 ${batch.summary.shipReadyCount}건 / 예외 ${batch.summary.exceptionCount}건`,
+    `예외율: ${summaryDisplay.exceptionRateText}`,
+    `예외 사유별 건수: ${summaryDisplay.reasonCountsText}`,
+    `최다 사유: ${summaryDisplay.topReasonText}`,
+    "주문별 결과 (입력 순서):",
+  ];
   batch.results.forEach((result, index) => lines.push(`입력 ${index + 1}: ${JSON.stringify(result)}`));
   lines.push("예외 처리 순서 (입력 번호는 1부터 시작):");
   if (batch.exceptionWorklist.length === 0) lines.push("처리할 예외가 없습니다.");
