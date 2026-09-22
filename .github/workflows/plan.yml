@@ -18,7 +18,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
       (github.event_name == 'issues' &&
-       startsWith(github.event.issue.title, '[업무 요구]'))
+       startsWith(github.event.issue.title, '[업무 요구]') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
     outputs:
       identity: ${{ steps.input.outputs.identity }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -46,7 +47,9 @@ jobs:
 
       - name: Install Framework dependencies
         working-directory: planner-control
-        run: npm ci --ignore-scripts
+        run: |
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Freeze user requirement and target SHA
         id: input
@@ -94,7 +97,7 @@ jobs:
 
       - name: Prepare bounded PLAN Context Pack
         working-directory: planner-control
-        run: node --import tsx src/self-improvement/planner-handler.ts prepare
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/planner-handler.ts prepare
         env:
           PLAN_TARGET: ${{ github.workspace }}/plan-target
           PLAN_OUTPUT: ${{ runner.temp }}/ai-plan
@@ -119,9 +122,9 @@ jobs:
 
       - name: Read-only bounded AI Planner
         timeout-minutes: 3
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+        uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           allow-bots: true
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
@@ -130,7 +133,6 @@ jobs:
           prompt-file: ${{ runner.temp }}/ai-plan/prompt.md
           output-schema-file: ${{ runner.temp }}/ai-plan/schema.json
           output-file: ${{ runner.temp }}/ai-plan/raw-plan.json
-          model: gpt-5.6-terra
           effort: medium
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
@@ -150,11 +152,13 @@ jobs:
 
       - name: Install Framework dependencies for validation
         working-directory: planner-control-validation
-        run: npm ci --ignore-scripts
+        run: |
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Validate bounded PLAN against fresh exact SHA
         working-directory: planner-control-validation
-        run: node --import tsx src/self-improvement/planner-handler.ts artifact
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/planner-handler.ts artifact
         env:
           PLAN_TARGET: ${{ github.workspace }}/plan-target-validation
           PLAN_OUTPUT: ${{ runner.temp }}/ai-plan
@@ -169,25 +173,6 @@ jobs:
             ${{ runner.temp }}/ai-plan/PLAN.md
             ${{ runner.temp }}/ai-plan/PLAN-context.json
             ${{ runner.temp }}/ai-plan/identity.json
-          if-no-files-found: error
-
-      - name: CODEX_HOME persisted PLAN usage exact 기록
-        id: usage
-        working-directory: planner-control-validation
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/plan-codex-home
-          AI_USAGE_STAGE: plan
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: plan
-          AI_USAGE_JSON: ${{ runner.temp }}/plan-usage/plan-usage.json
-
-      - name: trusted PLAN usage artifact 저장
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/plan-usage/plan-usage.json
           if-no-files-found: error
 
   provenance:

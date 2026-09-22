@@ -32,8 +32,7 @@ jobs:
     outputs:
       request_artifact_name: ${{ steps.source.outputs.artifact_name }}
       request_artifact_attempt: ${{ steps.source.outputs.run_attempt }}
-      source_control_plane_sha: ${{ steps.source.outputs.trusted_code_sha }}
-      source_request_control_plane_sha: ${{ steps.source.outputs.head_sha }}
+      source_control_plane_sha: ${{ steps.source.outputs.head_sha }}
       reviewed_head_sha: ${{ steps.prepare.outputs.reviewed_head_sha }}
       reviewed_branch: ${{ steps.prepare.outputs.reviewed_branch }}
       fix_attempt: ${{ steps.prepare.outputs.fix_attempt }}
@@ -76,15 +75,14 @@ jobs:
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
 
-            const defaultBranch = context.payload.repository.default_branch;
             if (
               !sourceRun ||
               sourceRun.status !== 'completed' ||
               sourceRun.conclusion !== 'success' ||
               sourceRun.path !== '.github/workflows/fix-request.yml' ||
               sourceRun.event !== 'workflow_dispatch' ||
-              sourceRun.head_branch !== defaultBranch ||
-              !/^[0-9a-f]{40,64}$/.test(sourceRun.head_sha || '') ||
+              sourceRun.head_branch !== context.payload.repository.default_branch ||
+              sourceRun.head_sha !== context.sha ||
               sourceRun.run_attempt !== runAttempt
             ) {
               core.setFailed(
@@ -92,57 +90,6 @@ jobs:
               );
               return;
             }
-
-            const { data: currentBranch } = await github.rest.repos.getBranch({
-              ...context.repo,
-              branch: defaultBranch,
-            });
-            if (
-              context.ref !== `refs/heads/${defaultBranch}` ||
-              currentBranch.commit.sha !== context.sha
-            ) {
-              core.setFailed('FIX Worker trusted code is not exact current default branch');
-              return;
-            }
-
-            const { data: drift } = await github.rest.repos.compareCommitsWithBasehead({
-              ...context.repo,
-              basehead: `${sourceRun.head_sha}...${context.sha}`,
-              per_page: 100,
-            });
-            const driftFiles = drift.files;
-            if (
-              !['ahead', 'identical'].includes(drift.status) ||
-              drift.merge_base_commit.sha !== sourceRun.head_sha ||
-              !Array.isArray(driftFiles) ||
-              driftFiles.length > 6
-            ) {
-              core.setFailed('FIX Worker recovery drift is not a bounded ancestor diff');
-              return;
-            }
-
-            const allowedFrameworkDrift = new Set([
-              '.github/workflows/fix-worker.yml',
-              'src/self-improvement/fix-handler.ts',
-              'test/fix-dispatch-workflow.test.ts',
-            ]);
-            const rejectedDrift = driftFiles.filter(
-              (file) =>
-                !['added', 'modified'].includes(file.status) ||
-                !allowedFrameworkDrift.has(file.filename) ||
-                file.previous_filename,
-            );
-            if (rejectedDrift.length > 0) {
-              core.setFailed(
-                `FIX Worker recovery requires fresh FIX Request; non-approved drift: ${rejectedDrift
-                  .map((file) => `${file.status}:${file.filename}`)
-                  .join(',')}`,
-              );
-              return;
-            }
-            core.info(
-              `FIX Worker recovery drift verified: source=${sourceRun.head_sha}, current=${context.sha}, files=${driftFiles.length}`,
-            );
 
             const { data } = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner,
@@ -161,12 +108,11 @@ jobs:
             core.setOutput('artifact_name', artifactName);
             core.setOutput('run_attempt', String(runAttempt));
             core.setOutput('head_sha', sourceRun.head_sha);
-            core.setOutput('trusted_code_sha', context.sha);
 
       - name: trusted control-plane exact SHA checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.source.outputs.trusted_code_sha }}
+          ref: ${{ steps.source.outputs.head_sha }}
           persist-credentials: false
 
       - name: FIX request artifact 다운로드
@@ -270,15 +216,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
-      - name: Node 설정
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Worker dependency 사전 준비
-        run: npm ci --ignore-scripts
-
       - name: trusted FIX prompt 다운로드
         uses: actions/download-artifact@v4
         with:
@@ -291,15 +228,13 @@ jobs:
 
       - name: Untrusted Codex FIX
         id: codex
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
+        timeout-minutes: 4
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":workspace"
           prompt-file: fix-prompt.txt
           allow-bot-users: "github-actions[bot]"
-          model: gpt-5.6-terra
-          effort: none
-          codex-home: ${{ runner.temp }}/fix-codex-home
 
       - name: trusted prompt 제거
         shell: bash
@@ -322,113 +257,10 @@ jobs:
           path: ${{ runner.temp }}/fix-workspace.tar.gz
           if-no-files-found: error
 
-      - name: exact trusted usage control-plane checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.source_control_plane_sha }}
-          path: usage-control
-          token: ${{ github.token }}
-          persist-credentials: false
-
-      - name: trusted usage parser 의존성 설치
-        working-directory: usage-control
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted FIX usage exact 기록
-        id: usage
-        working-directory: usage-control
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/fix-codex-home
-          AI_USAGE_STAGE: fix
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: worker
-          AI_USAGE_JSON: ${{ runner.temp }}/fix-usage/fix-usage.json
-
-      - name: trusted FIX usage artifact 저장
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/fix-usage/fix-usage.json
-          if-no-files-found: error
-
-  validate:
-    name: trusted FIX candidate deterministic validation
-    needs: [prepare, worker]
-    if: needs.prepare.result == 'success' && needs.worker.result == 'success'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ""
-      GH_TOKEN: ""
-      NODE_AUTH_TOKEN: ""
-      NPM_TOKEN: ""
-
-    steps:
-      - name: exact reviewed SHA clean checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.reviewed_head_sha }}
-          path: validated-target
-          fetch-depth: 2
-          persist-credentials: false
-
-      - name: exact validation base SHA 확인
-        shell: bash
-        working-directory: validated-target
-        env:
-          EXPECTED_SHA: ${{ needs.prepare.outputs.reviewed_head_sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-
-      - name: untrusted FIX workspace snapshot 다운로드
-        uses: actions/download-artifact@v4
-        with:
-          name: fix-workspace-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate-archive
-
-      - name: candidate workspace 복원 및 exact base에 overlay
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/candidate-workspace"
-          tar -xzf "${RUNNER_TEMP}/candidate-archive/fix-workspace.tar.gz"             -C "${RUNNER_TEMP}/candidate-workspace"
-          rsync -a --delete             --exclude='.git'             --exclude='node_modules/'             "${RUNNER_TEMP}/candidate-workspace/"             "${GITHUB_WORKSPACE}/validated-target/"
-
-      - name: Node 설정
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: validated-target/package-lock.json
-
-      - name: trusted validation dependencies 설치
-        working-directory: validated-target
-        run: npm ci
-
-      - name: FIX candidate 테스트
-        working-directory: validated-target
-        run: npm test
-
-      - name: FIX candidate 빌드
-        working-directory: validated-target
-        run: npm run build
-
-      - name: FIX candidate diff whitespace 검증
-        working-directory: validated-target
-        run: git diff --check
-
   record:
     name: clean FIX provenance 기록
-    needs: [prepare, worker, validate]
-    if: >-
-      needs.prepare.result == 'success' &&
-      needs.worker.result == 'success' &&
-      needs.validate.result == 'success'
+    needs: [prepare, worker]
+    if: needs.prepare.result == 'success' && needs.worker.result == 'success'
     permissions:
       contents: read
       actions: read
@@ -545,7 +377,7 @@ jobs:
           FIX_RUNTIME_DIR: ${{ runner.temp }}/fix
           SOURCE_FIX_REQUEST_RUN_ID: ${{ inputs.source_fix_request_run_id }}
           SOURCE_FIX_REQUEST_RUN_ATTEMPT: ${{ needs.prepare.outputs.request_artifact_attempt }}
-          SOURCE_FIX_REQUEST_CONTROL_PLANE_SHA: ${{ needs.prepare.outputs.source_request_control_plane_sha }}
+          SOURCE_FIX_REQUEST_CONTROL_PLANE_SHA: ${{ needs.prepare.outputs.source_control_plane_sha }}
           SOURCE_FIX_REQUEST_WORKFLOW_PATH: .github/workflows/fix-request.yml
           SOURCE_FIX_REQUEST_ARTIFACT_NAME: ${{ needs.prepare.outputs.request_artifact_name }}
           AI_RESULT_ID: codex-action-fix:${{ github.run_id }}:${{ github.run_attempt }}

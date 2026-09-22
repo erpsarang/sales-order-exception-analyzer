@@ -4,14 +4,12 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { BRIDGE_RECOVERY_DRIFT_POLICY, classifyDrift } from "../src/self-improvement/lineage/drift.js";
 import {
   classifyValidationWorktree,
   createCanonicalCandidatePatch,
   parsePorcelainStatus,
   type CandidatePatchFile,
 } from "../src/self-improvement/plan-bridge-patch.js";
-import { validateBridgeTrustedCodeIdentity } from "../src/self-improvement/plan-candidate-bridge.js";
 
 const bridgeSource = readFileSync(
   new URL("../src/self-improvement/plan-candidate-bridge.ts", import.meta.url),
@@ -209,51 +207,4 @@ test("finalize는 candidate의 exact path + content로 canonical patch를 만들
   assert.equal((finalize.match(/writeFileSync\(/g) ?? []).length, 2);
   // 옛 계약 제거
   assert.doesNotMatch(handlerSource, /validation worktree paths mismatch/);
-});
-
-test("#176 recovery: 성공한 Worker candidate를 AI 재호출 없이 기존 Bridge recovery 경로로 재사용할 수 있다", () => {
-  // 실제 cycle: Handoff(PLAN-재개, issue_comment) base = Worker head = 922a670…, Worker run 35516002653 success.
-  // 이 수정이 merge되면 default branch만 이동한다. 그 drift는 이 PR의 파일들이다.
-  const thisChange = [
-    "src/self-improvement/plan-bridge-patch.ts",
-    "src/self-improvement/plan-candidate-bridge-handler.ts",
-    "test/plan-candidate-bridge-recovery-finalize.test.ts",
-  ];
-  const drift = classifyDrift(
-    thisChange.map((path, index) => ({ path, status: index === 0 ? "added" as const : "modified" as const })),
-    BRIDGE_RECOVERY_DRIFT_POLICY,
-  );
-  assert.equal(drift.class, "FRAMEWORK_ONLY", JSON.stringify(drift.rejections));
-
-  // 같은 판정을 실제 Bridge workflow의 recovery guard 리터럴로도 확인한다.
-  const workflow = readFileSync(".github/workflows/plan-candidate-bridge.yml", "utf8");
-  assert.ok(workflow.includes("path.startsWith('src/self-improvement/')"));
-  assert.ok(workflow.includes("'test/plan-candidate-bridge-recovery-finalize.test.ts',"));
-  assert.match(workflow, /files\.length > 50/);
-
-  // recovery 진입점과 source 검증은 그대로: 명시적 Worker run + exact artifact, rebind Handoff(issue_comment) 허용, AI 없음.
-  assert.match(workflow, /workflow_dispatch:\n    inputs:\n      source_worker_run_id:/);
-  assert.match(workflow, /source_worker_run_attempt:/);
-  assert.match(workflow, /source_candidate_artifact_name:/);
-  assert.match(workflow, /!\['workflow_run', 'issue_comment'\]\.includes\(handoff\.event\)/);
-  assert.match(workflow, /const recovery = explicitRecovery \|\| run\.head_sha !== approvedBaseSha/);
-  assert.match(workflow, /core\.setOutput\('bridge_control_plane_sha', recovery \? context\.sha : run\.head_sha\)/);
-  assert.doesNotMatch(workflow, /openai\/codex-action|APP_CODEX_API_KEY/);
-  const artifact = "bounded-worker-candidate-issue-176-plan-35514067988-approval-5750163355-handoff-35515986038-attempt-1-worker-35516002653-attempt-1";
-  assert.match(artifact, new RegExp("^bounded-worker-candidate-issue-\\d+-plan-\\d+-approval-\\d+-handoff-(\\d+)-attempt-(\\d+)-worker-35516002653-attempt-1$"));
-
-  // recovery guard: candidate base는 그대로, trusted code만 새 default SHA.
-  const base = "922a670fa968" + "0".repeat(28);
-  const newDefault = "a".repeat(40);
-  assert.doesNotThrow(() => validateBridgeTrustedCodeIdentity({
-    baseSha: base,
-    trustedCodeSha: newDefault,
-    recoveryGuard: { kind: "trusted-recovery-compare-v1", baseSha: base, workerHeadSha: base, currentDefaultSha: newDefault },
-  }));
-  assert.throws(() => validateBridgeTrustedCodeIdentity({ baseSha: base, trustedCodeSha: newDefault }), /must equal exact candidate base SHA/);
-
-  // Trusted Rail은 Bridge run이 current default에서 실행되면 drift 비교 없이 받는다 (경계 변경 없음).
-  const rail = readFileSync(".github/workflows/trusted-rail.yml", "utf8");
-  assert.match(rail, /sourceKind === 'PLAN_BRIDGE' && run\.head_sha !== currentDefaultSha/);
-  assert.match(rail, /new Set\(\['workflow_run', 'workflow_dispatch'\]\)/);
 });

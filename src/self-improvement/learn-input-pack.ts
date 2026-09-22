@@ -10,15 +10,12 @@ export type LearnEvidenceKind =
   | "orchestration-summary"
   | "test-execution"
   | "recovery-event"
-  | "human-boundary"
-  | "app-runtime"
-  | "business-feedback";
+  | "human-boundary";
 
 export type LearnEvidenceSource =
   | { readonly kind: "issue"; readonly issueNumber: number }
   | { readonly kind: "pull-request"; readonly pullRequestNumber: number }
   | { readonly kind: "workflow-run"; readonly runId: number; readonly runAttempt: number }
-  | { readonly kind: "business-issue"; readonly issueNumber: number; readonly titleBodyDigest: string }
   | {
       readonly kind: "artifact";
       readonly artifactId: number;
@@ -92,8 +89,6 @@ const EVIDENCE_KINDS = new Set<string>([
   "test-execution",
   "recovery-event",
   "human-boundary",
-  "app-runtime",
-  "business-feedback",
 ]);
 
 const ALLOWED_SOURCE_KINDS: Record<LearnEvidenceKind, readonly LearnEvidenceSource["kind"][]> = {
@@ -103,8 +98,6 @@ const ALLOWED_SOURCE_KINDS: Record<LearnEvidenceKind, readonly LearnEvidenceSour
   "test-execution": ["artifact"],
   "recovery-event": ["workflow-run", "artifact"],
   "human-boundary": ["pull-request", "issue"],
-  "app-runtime": ["workflow-run", "artifact"],
-  "business-feedback": ["business-issue"],
 };
 
 function sha256(value: string | Buffer): string {
@@ -185,16 +178,6 @@ function normalizeSource(
       assertPositiveInteger("evidence.source.runId", source.runId);
       assertPositiveInteger("evidence.source.runAttempt", source.runAttempt);
       return { kind: "workflow-run", runId: source.runId, runAttempt: source.runAttempt };
-    case "business-issue":
-      assertPositiveInteger("evidence.source.issueNumber", source.issueNumber);
-      return {
-        kind: "business-issue",
-        issueNumber: source.issueNumber,
-        titleBodyDigest: normalizeSha256(
-          "evidence.source.titleBodyDigest",
-          source.titleBodyDigest,
-        ),
-      };
     case "artifact":
       assertPositiveInteger("evidence.source.artifactId", source.artifactId);
       assertNonempty("evidence.source.name", source.name);

@@ -37,59 +37,7 @@ test("Recovery Preflight는 STALLED_WORKER와 failed Worker/Handoff exact identi
   assert.match(workflow, /artifact\.digest/);
 });
 
-test("Recovery Preflight는 Handoff source event로 workflow_run과 issue_comment(rebind) 두 값만 허용한다", () => {
-  assert.match(workflow, /!\['workflow_run', 'issue_comment'\]\.includes\(handoff\.event\) \|\|/);
-  assert.doesNotMatch(workflow, /handoff\.event !== 'workflow_run'/);
-  // Handoff event를 다루는 곳은 allowlist 한 곳뿐이고, 다른 비교/우회가 없다.
-  assert.equal((workflow.match(/handoff\.event/g) ?? []).length, 1);
-  const literal = /!\[([^\]]+)\]\.includes\(handoff\.event\)/.exec(workflow);
-  assert.ok(literal);
-  const allowed = literal[1]!.split(",").map((item) => item.trim().replace(/^'(.*)'$/, "$1"));
-  assert.deepEqual(allowed, ["workflow_run", "issue_comment"]);
-  for (const event of ["push", "issues", "workflow_dispatch", "pull_request", "schedule", ""]) {
-    assert.equal(allowed.includes(event), false, event);
-  }
-});
-
-test("issue_comment Handoff 허용은 event 집합만 넓힐 뿐 나머지 Handoff identity 검증은 그대로다", () => {
-  const start = workflow.indexOf("handoff.name !== 'Trusted PLAN IMPLEMENT Handoff'");
-  const end = workflow.indexOf("STALLED_WORKER source Handoff identity mismatch");
-  assert.ok(start > 0 && end > start);
-  const block = workflow.slice(start, end);
-  const expectedConditions = [
-    "handoff.name !== 'Trusted PLAN IMPLEMENT Handoff' ||",
-    "handoff.path !== '.github/workflows/plan-implement-handoff.yml' ||",
-    "!['workflow_run', 'issue_comment'].includes(handoff.event) ||",
-    "handoff.status !== 'completed' ||",
-    "handoff.conclusion !== 'success' ||",
-    "handoff.run_attempt !== source.handoffRunAttempt ||",
-    "handoff.head_branch !== defaultBranch ||",
-    "handoff.head_sha !== source.baseSha",
-  ];
-  const actual = block.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("handoff.") || line.startsWith("!["));
-  assert.deepEqual(actual, expectedConditions);
-  // 실패 시 fail-closed (setFailed + return)
-  assert.match(workflow, /core\.setFailed\('STALLED_WORKER source Handoff identity mismatch'\);\n\s+return;/);
-});
-
-test("failed Worker 검증은 Handoff event 변경의 영향을 받지 않는다", () => {
-  const start = workflow.indexOf("worker.name !== 'PLAN Bounded IMPLEMENT Worker'");
-  const end = workflow.indexOf("STALLED_WORKER source Worker identity mismatch");
-  assert.ok(start > 0 && end > start);
-  const actual = workflow.slice(start, end).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("worker.") || line.startsWith("!/"));
-  assert.deepEqual(actual, [
-    "worker.name !== 'PLAN Bounded IMPLEMENT Worker' ||",
-    "worker.path !== '.github/workflows/plan-implement-worker.yml' ||",
-    "worker.event !== 'workflow_run' ||",
-    "worker.status !== 'completed' ||",
-    "worker.conclusion !== 'failure' ||",
-    "worker.run_attempt !== source.workerRunAttempt ||",
-    "worker.head_branch !== defaultBranch ||",
-    "!/^[0-9a-f]{40,64}$/.test(worker.head_sha || '')",
-  ]);
-});
-
-test("Recovery Preflight는 #75 approved base 이후 명시된 Framework recovery 파일 drift만 허용한다", () => {
+test("Recovery Preflight는 approved base 이후 명시된 Framework recovery 파일 drift만 허용한다", () => {
   assert.match(workflow, /compareCommitsWithBasehead/);
   assert.match(workflow, /comparison\.merge_base_commit\.sha !== source\.baseSha/);
   assert.match(workflow, /files\.length > 12/);

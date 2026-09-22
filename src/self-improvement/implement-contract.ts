@@ -27,8 +27,14 @@ export interface ApprovedPlanIdentity {
   };
 }
 
+export interface ApprovedRequirementSnapshot {
+  readonly title: string;
+  readonly body: string | null;
+}
+
 export interface ImplementScope {
   readonly allowedPaths: readonly string[];
+  readonly contextPaths?: readonly string[];
   readonly requiredChanges: readonly string[];
   readonly forbiddenChanges: readonly string[];
   readonly validationCommands: readonly string[];
@@ -41,12 +47,14 @@ export interface ImplementContractPayload {
   readonly schemaVersion: 1;
   readonly kind: "trusted-implement-contract";
   readonly requirement: ApprovedPlanIdentity["requirement"];
+  readonly requirementSnapshot: ApprovedRequirementSnapshot | null;
   readonly repository: string;
   readonly baseSha: string;
   readonly approvedPlan: ApprovedPlanIdentity["plan"];
   readonly approval: ApprovedPlanIdentity["approval"];
   readonly scope: {
     readonly allowedPaths: readonly string[];
+    readonly contextPaths: readonly string[];
     readonly requiredChanges: readonly string[];
     readonly forbiddenChanges: readonly string[];
     readonly validationCommands: readonly string[];
@@ -76,17 +84,36 @@ function assertDigest(name: string, value: string): void {
   if (!SHA256.test(value)) throw new Error(`${name} must be a lowercase SHA-256 hex digest`);
 }
 
-function normalizePaths(paths: readonly string[]): string[] {
-  if (paths.length === 0) throw new Error("allowedPaths must not be empty");
+export function requirementSnapshotDigest(snapshot: ApprovedRequirementSnapshot): string {
+  assertNonempty("requirementSnapshot.title", snapshot.title);
+  if (snapshot.body !== null && typeof snapshot.body !== "string") throw new Error("requirementSnapshot.body must be string or null");
+  return createHash("sha256").update(JSON.stringify([snapshot.title, snapshot.body]), "utf8").digest("hex");
+}
+
+function normalizeRequirementSnapshot(
+  snapshot: ApprovedRequirementSnapshot | null,
+  expectedDigest: string,
+): ApprovedRequirementSnapshot | null {
+  if (snapshot === null) return null;
+  const normalized = { title: snapshot.title, body: snapshot.body };
+  if (requirementSnapshotDigest(normalized) !== expectedDigest) {
+    throw new Error("requirementSnapshot digest mismatch; re-plan required");
+  }
+  return normalized;
+}
+
+function normalizePaths(name: "allowedPaths" | "contextPaths", paths: readonly string[], allowEmpty: boolean): string[] {
+  if (!allowEmpty && paths.length === 0) throw new Error(`${name} must not be empty`);
   const normalized = paths.map((path) => {
-    assertNonempty("allowed path", path);
+    const label = name === "allowedPaths" ? "allowed path" : "context path";
+    assertNonempty(label, path);
     if (path.startsWith("/") || path.includes("\\") || path.split("/").some((segment) => segment === ".." || segment === "")) {
-      throw new Error(`unsafe allowed path: ${path}`);
+      throw new Error(`unsafe ${label}: ${path}`);
     }
     return path;
   });
-  if (new Set(normalized).size !== normalized.length) throw new Error("allowedPaths must be unique");
-  return [...normalized].sort((a, b) => a.localeCompare(b));
+  if (new Set(normalized).size !== normalized.length) throw new Error(`${name} must be unique`);
+  return [...normalized].sort();
 }
 
 function normalizeNonemptyList(name: string, values: readonly string[], allowEmpty = false): string[] {
@@ -122,9 +149,15 @@ export function implementContractArtifactName(identity: ApprovedPlanIdentity): s
   return `implement-contract-issue-${identity.requirement.issueNumber}-plan-${identity.plan.runId}-attempt-${identity.plan.runAttempt}-approval-${identity.approval.commentId}`;
 }
 
-export function createImplementContract(identity: ApprovedPlanIdentity, scope: ImplementScope): ImplementContract {
+export function createImplementContract(
+  identity: ApprovedPlanIdentity,
+  scope: ImplementScope,
+  requirementSnapshot: ApprovedRequirementSnapshot | null = null,
+): ImplementContract {
   validateApprovedPlanIdentity(identity);
-  const allowedPaths = normalizePaths(scope.allowedPaths);
+  const approvedRequirementSnapshot = normalizeRequirementSnapshot(requirementSnapshot, identity.requirement.digest);
+  const allowedPaths = normalizePaths("allowedPaths", scope.allowedPaths, false);
+  const contextPaths = normalizePaths("contextPaths", scope.contextPaths ?? [], true);
   const requiredChanges = normalizeNonemptyList("requiredChanges", scope.requiredChanges);
   const forbiddenChanges = normalizeNonemptyList("forbiddenChanges", scope.forbiddenChanges, true);
   const validationCommands = normalizeNonemptyList("validationCommands", scope.validationCommands);
@@ -137,6 +170,7 @@ export function createImplementContract(identity: ApprovedPlanIdentity, scope: I
     schemaVersion: 1,
     kind: "trusted-implement-contract",
     requirement: { ...identity.requirement },
+    requirementSnapshot: approvedRequirementSnapshot,
     repository: identity.repository,
     baseSha: identity.targetSha,
     approvedPlan: {
@@ -148,6 +182,7 @@ export function createImplementContract(identity: ApprovedPlanIdentity, scope: I
     approval: { ...identity.approval },
     scope: {
       allowedPaths,
+      contextPaths,
       requiredChanges,
       forbiddenChanges,
       validationCommands,
@@ -173,7 +208,7 @@ export function verifyImplementContract(contract: ImplementContract): void {
     targetSha: contract.baseSha,
     plan: contract.approvedPlan,
     approval: contract.approval,
-  }, contract.scope);
+  }, contract.scope, contract.requirementSnapshot);
 
   if (JSON.stringify(regenerated) !== JSON.stringify(contract)) {
     throw new Error("IMPLEMENT contract digest or canonical shape mismatch");

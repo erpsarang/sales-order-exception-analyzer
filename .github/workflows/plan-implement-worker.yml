@@ -29,8 +29,6 @@ jobs:
       recovery_current_sha: ${{ steps.source.outputs.recovery_current_sha }}
       base_sha: ${{ steps.base.outputs.sha }}
       candidate_artifact_name: ${{ steps.prepare.outputs.candidate_artifact_name }}
-      ai_call_id: ${{ steps.prepare.outputs.ai_call_id }}
-      reused: ${{ steps.prepare.outputs.reuse_candidate }}
       ci_status: ${{ steps.ci0.outputs.status }}
       repair_ready: ${{ steps.ci0.outputs.repair_ready }}
       repair_blocked_reason: ${{ steps.ci0.outputs.repair_blocked_reason }}
@@ -115,12 +113,8 @@ jobs:
               core.setOutput('recovery_current_sha', recovery.currentDefaultSha);
               return;
             }
-            if (
-              run.name !== 'Trusted PLAN IMPLEMENT Handoff' ||
-              run.path !== '.github/workflows/plan-implement-handoff.yml' ||
-              !['workflow_run', 'issue_comment'].includes(run.event)
-            ) {
-              core.setFailed(`unexpected source handoff workflow: ${run.name} ${run.path} ${run.event}`);
+            if (run.name !== 'Trusted PLAN IMPLEMENT Handoff' || run.path !== '.github/workflows/plan-implement-handoff.yml' || run.event !== 'workflow_run') {
+              core.setFailed(`unexpected source handoff workflow: ${run.name} ${run.path}`);
               return;
             }
 
@@ -176,12 +170,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: control-prep/package-lock.json
+          cache-dependency-path: control-prep/.framework-runtime/package-lock.json
 
       - name: Trusted preparation dependencies 설치
         if: steps.source.outputs.should_run == 'true'
         working-directory: control-prep
-        run: npm ci --ignore-scripts
+        run: |
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Trusted handoff artifact 다운로드
         if: steps.source.outputs.should_run == 'true'
@@ -197,7 +193,7 @@ jobs:
         if: steps.source.outputs.should_run == 'true'
         id: prepare
         working-directory: control-prep
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts prepare
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-implement-worker-handler.ts prepare
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -214,43 +210,6 @@ jobs:
           SOURCE_DIRECTORY: ${{ runner.temp }}/plan-worker-source
           WORKER_INPUT_DIRECTORY: ${{ runner.temp }}/plan-worker-input
 
-      - name: 동일 AI call 성공 candidate 다운로드
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.prepare.outputs.reuse_candidate_name }}
-          path: ${{ runner.temp }}/reused-candidate
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.prepare.outputs.reuse_worker_run_id }}
-
-      - name: 재사용 candidate trusted rebind
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
-        working-directory: control-prep
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts reuse
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
-          SOURCE_RUN_ATTEMPT: ${{ steps.source.outputs.run_attempt }}
-          SOURCE_ARTIFACT_NAME: ${{ steps.source.outputs.name }}
-          SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.id }}
-          SOURCE_ARTIFACT_DIGEST: ${{ steps.source.outputs.digest }}
-          RECOVERY_GUARD_KIND: ${{ steps.source.outputs.recovery_kind }}
-          RECOVERY_BASE_SHA: ${{ steps.source.outputs.recovery_base_sha }}
-          RECOVERY_CURRENT_SHA: ${{ steps.source.outputs.recovery_current_sha }}
-          WORKER_RUN_ID: ${{ github.run_id }}
-          WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_CALL_ID: ${{ steps.prepare.outputs.ai_call_id }}
-          REUSE_WORKER_RUN_ID: ${{ steps.prepare.outputs.reuse_worker_run_id }}
-          REUSE_WORKER_RUN_ATTEMPT: ${{ steps.prepare.outputs.reuse_worker_run_attempt }}
-          REUSE_CANDIDATE_NAME: ${{ steps.prepare.outputs.reuse_candidate_name }}
-          REUSE_CANDIDATE_ID: ${{ steps.prepare.outputs.reuse_candidate_id }}
-          REUSE_CANDIDATE_DIGEST: ${{ steps.prepare.outputs.reuse_candidate_digest }}
-          SOURCE_DIRECTORY: ${{ runner.temp }}/plan-worker-source
-          REUSED_CANDIDATE_DIRECTORY: ${{ runner.temp }}/reused-candidate
-          CANDIDATE_OUTPUT_DIRECTORY: ${{ runner.temp }}/validated-candidate-0
-
       - name: exact approved base SHA 고정
         if: steps.source.outputs.should_run == 'true'
         id: base
@@ -262,13 +221,8 @@ jobs:
           BASE_SHA="$(node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.env.CONTRACT_JSON,"utf8")); if(typeof x.baseSha!=="string" || !/^[0-9a-f]{40,64}$/.test(x.baseSha)) process.exit(2); process.stdout.write(x.baseSha)')"
           echo "sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: 재사용 검증 후 trusted preparation 제거
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate == 'true'
-        shell: bash
-        run: rm -rf "$GITHUB_WORKSPACE/control-prep" "$RUNNER_TEMP/plan-worker-source" "$RUNNER_TEMP/reused-candidate"
-
       - name: Worker 실행 전 repository와 trusted source 제거
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
+        if: steps.source.outputs.should_run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -279,13 +233,13 @@ jobs:
           test -f "$RUNNER_TEMP/plan-worker-input/schema.json"
 
       - name: IMPLEMENT timeout 측정 시작
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
+        if: steps.source.outputs.should_run == 'true'
         id: implement_clock
         shell: bash
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Untrusted bounded IMPLEMENT Worker
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
+        if: steps.source.outputs.should_run == 'true'
         id: implement0
         continue-on-error: true
         timeout-minutes: 4
@@ -294,7 +248,7 @@ jobs:
           GH_TOKEN: ""
           GITHUB_TOKEN: ""
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
           working-directory: ${{ runner.temp }}/worker-neutral
@@ -302,12 +256,11 @@ jobs:
           prompt-file: ${{ runner.temp }}/plan-worker-input/prompt.md
           output-schema-file: ${{ runner.temp }}/plan-worker-input/schema.json
           output-file: ${{ runner.temp }}/worker-output/raw-proposal.json
-          model: gpt-5.6-terra
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
       - name: IMPLEMENT timeout 재시도 분류
-        if: always() && steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
+        if: always() && steps.source.outputs.should_run == 'true'
         id: timeout0
         shell: bash
         env:
@@ -332,7 +285,7 @@ jobs:
           fi
 
       - name: bounded IMPLEMENT 실행 결과 확인
-        if: always() && steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true'
+        if: always() && steps.source.outputs.should_run == 'true'
         id: implement_gate
         shell: bash
         env:
@@ -351,7 +304,7 @@ jobs:
           exit 1
 
       - name: timeout retry input artifact 저장
-        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
+        if: steps.timeout0.outputs.retry == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bounded-worker-timeout-retry-input-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -360,70 +313,10 @@ jobs:
             ${{ runner.temp }}/plan-worker-input/schema.json
           if-no-files-found: error
 
-      - name: Trusted attempt0 timeout usage checkout
-        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          persist-credentials: false
-          path: control-timeout-usage-0
-
-      - name: Trusted attempt0 timeout usage dependencies 설치
-        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
-        working-directory: control-timeout-usage-0
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT attempt0 timeout usage 관찰
-        if: steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
-        id: timeout_usage0
-        working-directory: control-timeout-usage-0
-        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home
-          AI_USAGE_STAGE: bounded-implement-attempt0
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: attempt0
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
-          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/attempt0-timeout.json
-
-      - name: trusted bounded IMPLEMENT attempt0 timeout usage artifact 저장
-        if: steps.timeout_usage0.outputs.status == 'recorded'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.timeout_usage0.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
-          if-no-files-found: error
-
-      - name: trusted bounded IMPLEMENT attempt0 timeout usage unavailable observation 저장
-        if: steps.timeout_usage0.outputs.status == 'unavailable'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.timeout_usage0.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage-observation/attempt0-timeout.json
-          if-no-files-found: error
-
-      - name: attempt0 timeout CODEX_HOME 제거
-        if: always() && steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry == 'true'
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/worker-codex-home"
-
-      - name: attempt0 raw proposal artifact 저장
-        if: >-
-          steps.source.outputs.should_run == 'true' &&
-          steps.prepare.outputs.reuse_candidate != 'true' &&
-          steps.implement0.outcome == 'success' &&
-          steps.timeout0.outputs.retry != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bounded-worker-raw-proposal-attempt0-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worker-output/raw-proposal.json
-          if-no-files-found: error
-
       - name: Worker input 제거
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.implement_gate.outcome == 'success' && steps.timeout0.outputs.retry != 'true'
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/plan-worker-input"
+        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
       - name: Trusted validation checkout 0
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
@@ -436,45 +329,9 @@ jobs:
       - name: Trusted validation dependencies 설치 0
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
         working-directory: control-validate-0
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT attempt0 usage exact 기록
-        if: >-
-          steps.source.outputs.should_run == 'true' &&
-          steps.prepare.outputs.reuse_candidate != 'true' &&
-          steps.implement0.outcome == 'success' &&
-          steps.timeout0.outputs.retry != 'true'
-        id: usage0
-        working-directory: control-validate-0
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home
-          AI_USAGE_STAGE: bounded-implement-attempt0
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: attempt0
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
-
-      - name: trusted bounded IMPLEMENT attempt0 usage artifact 저장
-        if: >-
-          steps.source.outputs.should_run == 'true' &&
-          steps.prepare.outputs.reuse_candidate != 'true' &&
-          steps.implement0.outcome == 'success' &&
-          steps.timeout0.outputs.retry != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage0.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/attempt0.json
-          if-no-files-found: error
-
-      - name: attempt0 CODEX_HOME 제거
-        if: >-
-          always() &&
-          steps.source.outputs.should_run == 'true' &&
-          steps.prepare.outputs.reuse_candidate != 'true' &&
-          steps.timeout0.outputs.retry != 'true'
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/worker-codex-home"
+        run: |
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Trusted handoff artifact 재다운로드 0
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
@@ -487,9 +344,9 @@ jobs:
           run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Trusted candidate 검증 0
-        if: steps.source.outputs.should_run == 'true' && steps.prepare.outputs.reuse_candidate != 'true' && steps.timeout0.outputs.retry != 'true'
+        if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true'
         working-directory: control-validate-0
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts validate
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-implement-worker-handler.ts validate
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -549,7 +406,7 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
-        run: node --import tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
 
       - name: attempt 0 state 정리
         if: steps.source.outputs.should_run == 'true' && steps.timeout0.outputs.retry != 'true' && steps.ci0.outcome == 'success'
@@ -603,15 +460,13 @@ jobs:
           test -f "$RUNNER_TEMP/plan-worker-input/schema.json"
 
       - name: Untrusted bounded IMPLEMENT timeout retry
-        id: implement_retry
-        continue-on-error: true
         timeout-minutes: 6
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
           GH_TOKEN: ""
           GITHUB_TOKEN: ""
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
           working-directory: ${{ runner.temp }}/worker-neutral
@@ -619,25 +474,14 @@ jobs:
           prompt-file: ${{ runner.temp }}/plan-worker-input/prompt.md
           output-schema-file: ${{ runner.temp }}/plan-worker-input/schema.json
           output-file: ${{ runner.temp }}/worker-output/raw-proposal.json
-          model: gpt-5.6-terra
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
-      - name: timeout retry raw proposal artifact 저장
-        if: steps.implement_retry.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bounded-worker-raw-proposal-timeout-retry-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worker-output/raw-proposal.json
-          if-no-files-found: error
-
       - name: timeout retry input 제거
-        if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/plan-worker-input"
+        run: rm -rf "$RUNNER_TEMP/plan-worker-input" "$RUNNER_TEMP/worker-codex-home-timeout-retry"
 
       - name: Trusted validation checkout retry
-        if: always()
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -645,85 +489,17 @@ jobs:
           path: control-validate-retry
 
       - name: Node 설정 retry
-        if: always()
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: control-validate-retry/package-lock.json
+          cache-dependency-path: control-validate-retry/.framework-runtime/package-lock.json
 
       - name: Trusted validation dependencies 설치 retry
-        if: always()
         working-directory: control-validate-retry
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT timeout retry usage exact 기록
-        if: steps.implement_retry.outcome == 'success'
-        id: usage_retry
-        working-directory: control-validate-retry
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-timeout-retry
-          AI_USAGE_STAGE: bounded-implement-timeout-retry
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: timeout_retry
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
-
-      - name: trusted bounded IMPLEMENT timeout retry usage artifact 저장
-        if: steps.implement_retry.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage_retry.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
-          if-no-files-found: error
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT timeout retry failure usage 관찰
-        if: steps.implement_retry.outcome == 'failure'
-        id: retry_failure_usage
-        working-directory: control-validate-retry
-        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-timeout-retry
-          AI_USAGE_STAGE: bounded-implement-timeout-retry
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: timeout_retry
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
-          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/timeout-retry-failure.json
-
-      - name: trusted bounded IMPLEMENT timeout retry failure usage artifact 저장
-        if: steps.retry_failure_usage.outputs.status == 'recorded'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.retry_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/timeout-retry.json
-          if-no-files-found: error
-
-      - name: trusted bounded IMPLEMENT timeout retry failure usage unavailable observation 저장
-        if: steps.retry_failure_usage.outputs.status == 'unavailable'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.retry_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage-observation/timeout-retry-failure.json
-          if-no-files-found: error
-
-      - name: timeout retry CODEX_HOME 제거
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/worker-codex-home-timeout-retry"
-
-      - name: timeout retry 실행 결과 확인
-        if: always()
-        shell: bash
-        env:
-          RETRY_OUTCOME: ${{ steps.implement_retry.outcome }}
         run: |
-          set -euo pipefail
-          if [ "$RETRY_OUTCOME" != "success" ]; then
-            echo "bounded IMPLEMENT timeout retry failed after usage observation" >&2
-            exit 1
-          fi
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Trusted handoff artifact 재다운로드 retry
         uses: actions/download-artifact@v4
@@ -736,7 +512,7 @@ jobs:
 
       - name: Trusted candidate 검증 retry
         working-directory: control-validate-retry
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts validate
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-implement-worker-handler.ts validate
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -792,7 +568,7 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
-        run: node --import tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
 
       - name: timeout retry state 정리
         if: steps.ci0_retry.outcome == 'success'
@@ -838,9 +614,6 @@ jobs:
       recovery_current_sha: ${{ steps.effective.outputs.recovery_current_sha }}
       base_sha: ${{ steps.effective.outputs.base_sha }}
       candidate_artifact_name: ${{ steps.effective.outputs.candidate_artifact_name }}
-      ai_call_id: ${{ steps.effective.outputs.ai_call_id }}
-      reused: ${{ steps.effective.outputs.reused }}
-      retry_required: ${{ steps.effective.outputs.retry_required }}
 
     steps:
       - name: initial/retry effective 결과 고정
@@ -867,8 +640,6 @@ jobs:
           RECOVERY_CURRENT_SHA: ${{ needs.attempt0.outputs.recovery_current_sha }}
           BASE_SHA: ${{ needs.attempt0.outputs.base_sha }}
           CANDIDATE_ARTIFACT_NAME: ${{ needs.attempt0.outputs.candidate_artifact_name }}
-          AI_CALL_ID: ${{ needs.attempt0.outputs.ai_call_id }}
-          REUSED: ${{ needs.attempt0.outputs.reused }}
         run: |
           set -euo pipefail
           infrastructure_failed=false
@@ -910,9 +681,6 @@ jobs:
             echo "recovery_current_sha=$RECOVERY_CURRENT_SHA"
             echo "base_sha=$BASE_SHA"
             echo "candidate_artifact_name=$CANDIDATE_ARTIFACT_NAME"
-            echo "ai_call_id=$AI_CALL_ID"
-            echo "reused=$REUSED"
-            echo "retry_required=$RETRY_REQUIRED"
           } >> "$GITHUB_OUTPUT"
 
 
@@ -952,15 +720,13 @@ jobs:
           test -f "$RUNNER_TEMP/repair-input-1/schema.json"
 
       - name: Untrusted bounded IMPLEMENT repair 1
-        id: implement_repair1
-        continue-on-error: true
         timeout-minutes: 4
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
           GH_TOKEN: ""
           GITHUB_TOKEN: ""
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
           working-directory: ${{ runner.temp }}/worker-neutral-repair-1
@@ -968,25 +734,14 @@ jobs:
           prompt-file: ${{ runner.temp }}/repair-input-1/prompt.md
           output-schema-file: ${{ runner.temp }}/repair-input-1/schema.json
           output-file: ${{ runner.temp }}/worker-output-repair-1/raw-proposal.json
-          model: gpt-5.6-terra
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
-      - name: repair 1 raw proposal artifact 저장
-        if: steps.implement_repair1.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bounded-worker-raw-proposal-repair1-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worker-output-repair-1/raw-proposal.json
-          if-no-files-found: error
-
       - name: repair 1 input 제거
-        if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/repair-input-1"
+        run: rm -rf "$RUNNER_TEMP/repair-input-1" "$RUNNER_TEMP/worker-codex-home-repair-1"
 
       - name: Trusted validation checkout 1
-        if: always()
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -994,85 +749,17 @@ jobs:
           path: control-validate-1
 
       - name: Node 설정
-        if: always()
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: control-validate-1/package-lock.json
+          cache-dependency-path: control-validate-1/.framework-runtime/package-lock.json
 
       - name: Trusted validation dependencies 설치 1
-        if: always()
         working-directory: control-validate-1
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT repair1 usage exact 기록
-        if: steps.implement_repair1.outcome == 'success'
-        id: usage1
-        working-directory: control-validate-1
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-1
-          AI_USAGE_STAGE: bounded-implement-repair1
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: repair1
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair1.json
-
-      - name: trusted bounded IMPLEMENT repair1 usage artifact 저장
-        if: steps.implement_repair1.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage1.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/repair1.json
-          if-no-files-found: error
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT repair1 failure usage 관찰
-        if: steps.implement_repair1.outcome == 'failure'
-        id: repair1_failure_usage
-        working-directory: control-validate-1
-        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-1
-          AI_USAGE_STAGE: bounded-implement-repair1
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: repair1
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair1.json
-          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/repair1-failure.json
-
-      - name: trusted bounded IMPLEMENT repair1 failure usage artifact 저장
-        if: steps.repair1_failure_usage.outputs.status == 'recorded'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.repair1_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/repair1.json
-          if-no-files-found: error
-
-      - name: trusted bounded IMPLEMENT repair1 failure usage unavailable observation 저장
-        if: steps.repair1_failure_usage.outputs.status == 'unavailable'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.repair1_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage-observation/repair1-failure.json
-          if-no-files-found: error
-
-      - name: repair1 CODEX_HOME 제거
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/worker-codex-home-repair-1"
-
-      - name: repair1 실행 결과 확인
-        if: always()
-        shell: bash
-        env:
-          REPAIR1_OUTCOME: ${{ steps.implement_repair1.outcome }}
         run: |
-          set -euo pipefail
-          if [ "$REPAIR1_OUTCOME" != "success" ]; then
-            echo "bounded IMPLEMENT repair1 failed after usage observation" >&2
-            exit 1
-          fi
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Trusted handoff artifact 재다운로드 1
         uses: actions/download-artifact@v4
@@ -1085,7 +772,7 @@ jobs:
 
       - name: Trusted candidate 검증 1
         working-directory: control-validate-1
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts validate
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-implement-worker-handler.ts validate
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -1141,7 +828,7 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
-        run: node --import tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
 
       - name: attempt 1 state 정리
         if: steps.ci1.outcome == 'success'
@@ -1200,15 +887,13 @@ jobs:
           test -f "$RUNNER_TEMP/repair-input-2/schema.json"
 
       - name: Untrusted bounded IMPLEMENT repair 2
-        id: implement_repair2
-        continue-on-error: true
         timeout-minutes: 4
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11; exact pin
         env:
           GH_TOKEN: ""
           GITHUB_TOKEN: ""
         with:
-          openai-api-key: ${{ secrets.APP_CODEX_API_KEY }}
+          openai-api-key: ${{ secrets[github.repository == 'erpsarang/self-improvement-mvp' && 'FRAMEWORK_CODEX_API_KEY' || 'APP_CODEX_API_KEY'] }}
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
           working-directory: ${{ runner.temp }}/worker-neutral-repair-2
@@ -1216,25 +901,14 @@ jobs:
           prompt-file: ${{ runner.temp }}/repair-input-2/prompt.md
           output-schema-file: ${{ runner.temp }}/repair-input-2/schema.json
           output-file: ${{ runner.temp }}/worker-output-repair-2/raw-proposal.json
-          model: gpt-5.6-terra
           effort: low
           codex-args: '["-c","project_doc_max_bytes=0"]'
 
-      - name: repair 2 raw proposal artifact 저장
-        if: steps.implement_repair2.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bounded-worker-raw-proposal-repair2-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worker-output-repair-2/raw-proposal.json
-          if-no-files-found: error
-
       - name: repair 2 input 제거
-        if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/repair-input-2"
+        run: rm -rf "$RUNNER_TEMP/repair-input-2" "$RUNNER_TEMP/worker-codex-home-repair-2"
 
       - name: Trusted validation checkout 2
-        if: always()
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -1242,85 +916,17 @@ jobs:
           path: control-validate-2
 
       - name: Node 설정
-        if: always()
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: control-validate-2/package-lock.json
+          cache-dependency-path: control-validate-2/.framework-runtime/package-lock.json
 
       - name: Trusted validation dependencies 설치 2
-        if: always()
         working-directory: control-validate-2
-        run: npm ci --ignore-scripts
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT repair2 usage exact 기록
-        if: steps.implement_repair2.outcome == 'success'
-        id: usage2
-        working-directory: control-validate-2
-        run: npm exec -- tsx src/self-improvement/ai-usage-rollout-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-2
-          AI_USAGE_STAGE: bounded-implement-repair2
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: repair2
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair2.json
-
-      - name: trusted bounded IMPLEMENT repair2 usage artifact 저장
-        if: steps.implement_repair2.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage2.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/repair2.json
-          if-no-files-found: error
-
-      - name: CODEX_HOME persisted bounded IMPLEMENT repair2 failure usage 관찰
-        if: steps.implement_repair2.outcome == 'failure'
-        id: repair2_failure_usage
-        working-directory: control-validate-2
-        run: npm exec -- tsx src/self-improvement/ai-usage-timeout-observation-handler.ts
-        env:
-          CODEX_HOME_PATH: ${{ runner.temp }}/worker-codex-home-repair-2
-          AI_USAGE_STAGE: bounded-implement-repair2
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_JOB_NAME: repair2
-          AI_USAGE_JSON: ${{ runner.temp }}/bounded-implement-usage/repair2.json
-          AI_USAGE_UNAVAILABLE_JSON: ${{ runner.temp }}/bounded-implement-usage-observation/repair2-failure.json
-
-      - name: trusted bounded IMPLEMENT repair2 failure usage artifact 저장
-        if: steps.repair2_failure_usage.outputs.status == 'recorded'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.repair2_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage/repair2.json
-          if-no-files-found: error
-
-      - name: trusted bounded IMPLEMENT repair2 failure usage unavailable observation 저장
-        if: steps.repair2_failure_usage.outputs.status == 'unavailable'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.repair2_failure_usage.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage-observation/repair2-failure.json
-          if-no-files-found: error
-
-      - name: repair2 CODEX_HOME 제거
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/worker-codex-home-repair-2"
-
-      - name: repair2 실행 결과 확인
-        if: always()
-        shell: bash
-        env:
-          REPAIR2_OUTCOME: ${{ steps.implement_repair2.outcome }}
         run: |
-          set -euo pipefail
-          if [ "$REPAIR2_OUTCOME" != "success" ]; then
-            echo "bounded IMPLEMENT repair2 failed after usage observation" >&2
-            exit 1
-          fi
+          npm ci --ignore-scripts --prefix .framework-runtime
+          ln -sT .framework-runtime/node_modules node_modules
 
       - name: Trusted handoff artifact 재다운로드 2
         uses: actions/download-artifact@v4
@@ -1333,7 +939,7 @@ jobs:
 
       - name: Trusted candidate 검증 2
         working-directory: control-validate-2
-        run: node --import tsx src/self-improvement/plan-implement-worker-handler.ts validate
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-implement-worker-handler.ts validate
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -1387,7 +993,7 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
           NPM_TOKEN: ""
-        run: node --import tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
+        run: .framework-runtime/node_modules/.bin/tsx src/self-improvement/plan-worker-ci-repair-handler.ts check
 
       - name: attempt 2 state 정리
         if: steps.ci2.outcome == 'success'
@@ -1412,69 +1018,11 @@ jobs:
     if: always() && needs.attempt0_result.outputs.should_run == 'true'
     permissions:
       actions: read
-      contents: read
       issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: bounded IMPLEMENT recorded usage summary 입력 준비
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        shell: bash
-        run: mkdir -p "$RUNNER_TEMP/bounded-implement-usage-records"
-
-      - name: bounded IMPLEMENT recorded usage artifacts 다운로드
-        if: >-
-          needs.attempt0_result.outputs.infrastructure_failed != 'true' &&
-          (needs.attempt0_result.outputs.reused != 'true' ||
-           needs.repair1.result == 'success' ||
-           needs.repair2.result == 'success')
-        uses: actions/download-artifact@v4
-        with:
-          pattern: ai-usage-bounded-implement-*-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/bounded-implement-usage-records
-          merge-multiple: true
-
-      - name: Trusted recorded usage summary checkout
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          persist-credentials: false
-          path: control-usage-summary
-
-      - name: Node 설정 usage summary
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: control-usage-summary/package-lock.json
-
-      - name: Trusted usage summary dependencies 설치
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        working-directory: control-usage-summary
-        run: npm ci --ignore-scripts
-
-      - name: bounded IMPLEMENT recorded usage summary 생성
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        id: usage_summary
-        working-directory: control-usage-summary
-        run: npm exec -- tsx src/self-improvement/ai-usage-summary-handler.ts
-        env:
-          AI_USAGE_SUMMARY_DIRECTORY: ${{ runner.temp }}/bounded-implement-usage-records
-          AI_USAGE_RUN_ID: ${{ github.run_id }}
-          AI_USAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AI_USAGE_SUMMARY_JSON: ${{ runner.temp }}/bounded-implement-usage-summary/summary.json
-
-      - name: trusted bounded IMPLEMENT recorded usage summary artifact 저장
-        if: needs.attempt0_result.outputs.infrastructure_failed != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.usage_summary.outputs.artifact_name }}
-          path: ${{ runner.temp }}/bounded-implement-usage-summary/summary.json
-          if-no-files-found: error
-
       - name: attempt 0 state 다운로드
         if: needs.attempt0_result.outputs.ci_status != ''
         uses: actions/download-artifact@v4
@@ -1645,34 +1193,4 @@ jobs:
           path: |
             ${{ runner.temp }}/final-candidate/candidate.json
             ${{ runner.temp }}/final-candidate/candidate-provenance.json
-          if-no-files-found: error
-
-      - name: direct PASS AI call ledger 생성
-        if: >-
-          needs.attempt0_result.outputs.ci_status == 'PASS' &&
-          needs.attempt0_result.outputs.reused != 'true' &&
-          needs.attempt0_result.outputs.retry_required != 'true'
-        shell: bash
-        env:
-          AI_CALL_ID: ${{ needs.attempt0_result.outputs.ai_call_id }}
-          SOURCE_RUN_ID: ${{ needs.attempt0_result.outputs.source_run_id }}
-          SOURCE_RUN_ATTEMPT: ${{ needs.attempt0_result.outputs.source_run_attempt }}
-          CANDIDATE_ARTIFACT_NAME: ${{ needs.attempt0_result.outputs.candidate_artifact_name }}
-          WORKER_RUN_ID: ${{ github.run_id }}
-          WORKER_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          test "${#AI_CALL_ID}" -eq 64
-          mkdir -p "$RUNNER_TEMP/ai-call-ledger"
-          printf '{"schemaVersion":1,"kind":"trusted-bounded-worker-ai-call-ledger","aiCallId":"%s","sourceHandoff":{"runId":%s,"runAttempt":%s},"worker":{"runId":%s,"runAttempt":%s},"candidateArtifact":"%s"}\n'             "$AI_CALL_ID" "$SOURCE_RUN_ID" "$SOURCE_RUN_ATTEMPT" "$WORKER_RUN_ID" "$WORKER_RUN_ATTEMPT" "$CANDIDATE_ARTIFACT_NAME"             > "$RUNNER_TEMP/ai-call-ledger/ledger.json"
-
-      - name: direct PASS AI call ledger 저장
-        if: >-
-          needs.attempt0_result.outputs.ci_status == 'PASS' &&
-          needs.attempt0_result.outputs.reused != 'true' &&
-          needs.attempt0_result.outputs.retry_required != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bounded-worker-ai-call-${{ needs.attempt0_result.outputs.ai_call_id }}
-          path: ${{ runner.temp }}/ai-call-ledger/ledger.json
           if-no-files-found: error

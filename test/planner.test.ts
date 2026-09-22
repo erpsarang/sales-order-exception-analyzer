@@ -45,6 +45,7 @@ function planFor(context: PlanContextPack) {
     implementationScope: {
       ready: true,
       allowedPaths: [allowedPath],
+      contextPaths: [],
       requiredChanges: ["고객 이름 필터를 추가한다"],
       forbiddenChanges: ["승인 또는 병합 경계를 변경하지 않는다"],
       validationCommands: ["npm test"],
@@ -145,7 +146,7 @@ test("implementation scope is fail-closed and cannot authorize unseen existing p
     const paused = {
       ...valid,
       questions: ["정확한 출력 지점을 확인해야 합니다."],
-      implementationScope: { ready: false, allowedPaths: [], requiredChanges: [], forbiddenChanges: [], validationCommands: [] },
+      implementationScope: { ready: false, allowedPaths: [], contextPaths: [], requiredChanges: [], forbiddenChanges: [], validationCommands: [] },
     };
     const normalizedPaused = validatePlan(paused, f.target, context);
     assert.equal((normalizedPaused.implementationScope as { ready: boolean }).ready, false);
@@ -153,6 +154,53 @@ test("implementation scope is fail-closed and cannot authorize unseen existing p
       ...paused,
       implementationScope: { ...paused.implementationScope, allowedPaths: ["new.ts"] },
     }, f.target, context), /must be empty when ready=false/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("ready PLAN은 Human approval 전에 package-lock companion capacity와 exact path self-consistency를 검증한다", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.target, "package.json"), '{"scripts":{"test":"node --test","build":"node --check orders.ts"}}\\n');
+    const context = selectPlanContext("웹 package build 변경", f.target, "example/orders", "d".repeat(40), { maxFiles: 4 });
+    assert.ok(context.files.some((file) => file.path === "package.json"));
+    const base = planFor(context);
+    const analysis = context.files.slice(0, Math.min(2, context.files.length)).map((file, index) => ({
+      evidenceId: file.evidenceId,
+      finding: index === 0 ? "웹 실행 설정 변경 후보입니다." : "기존 동작을 함께 확인해야 합니다.",
+    }));
+
+    const saturated = {
+      ...base,
+      analysis,
+      changeCandidates: ["package.json: build script를 변경한다"],
+      implementationScope: {
+        ...base.implementationScope,
+        allowedPaths: ["package.json", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts", "src/f.ts", "src/g.ts"],
+        requiredChanges: ["package.json build script를 변경한다"],
+      },
+    };
+    assert.throws(
+      () => validatePlan(saturated, f.target, context),
+      /package-lock\.json capacity within bounded scope/,
+    );
+
+    const missingTestPath = {
+      ...base,
+      testStrategy: ["test/new-web.test.ts를 신규 추가한다"],
+    };
+    assert.throws(
+      () => validatePlan(missingTestPath, f.target, context),
+      /exact path outside bounded implementation scope: test\/new-web\.test\.ts/,
+    );
+
+    const missingChangeCandidate = {
+      ...base,
+      changeCandidates: ["src/not-allowed.ts: 신규 구현 파일"],
+    };
+    assert.throws(
+      () => validatePlan(missingChangeCandidate, f.target, context),
+      /change candidate path is outside allowedPaths: src\/not-allowed\.ts/,
+    );
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -195,7 +243,9 @@ test("rejects free-form quote/path evidence, missing strategies, empty requireme
     assert.match(schemaText, /evidenceId/);
     assert.doesNotMatch(schemaText, /quote/);
     assert.doesNotMatch(schemaText, /"path"/);
-    assert.match(JSON.stringify(PLAN_SCHEMA.properties.implementationScope), /allowedPaths/);
+    const scopeSchema = JSON.stringify(PLAN_SCHEMA.properties.implementationScope);
+    assert.match(scopeSchema, /allowedPaths/);
+    assert.match(scopeSchema, /contextPaths/);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -269,7 +319,7 @@ test("PLAN prompt는 allowedPaths가 repository-relative path이며 filesystem �
     }
     assert.match(prompt, /'\.\/' 또는 '\.\.\/' 로 시작하는 경로, backslash, 끝의 '\/', 디렉터리 경로, wildcard도 금지/);
     // 정상 예시
-    for (const example of ["package.json", "src/order-analysis-cli.ts", "src/web-main.ts"]) assert.ok(prompt.includes(example), example);
+    for (const example of ["package.json", "src/feature.ts", "test/feature.test.ts"]) assert.ok(prompt.includes(example), example);
     // 3. 기존 파일은 Context Pack path 그대로
     assert.match(prompt, /Context Pack의 path 값을 글자 그대로 사용하세요/);
     // 4. 신규 파일도 repo-relative exact path
@@ -277,6 +327,9 @@ test("PLAN prompt는 allowedPaths가 repository-relative path이며 filesystem �
     // 기존 계약 문구는 유지
     assert.match(prompt, /wildcard\/placeholder를 쓰지 마세요/);
     assert.match(prompt, /implementationScope\.ready=true이면 questions는 반드시 빈 배열/);
+    assert.match(prompt, /추가·수정·생성할 파일을 언급하면 repository-relative exact path를 쓰고 반드시 allowedPaths에 포함/);
+    assert.match(prompt, /package-lock\.json companion을 추가할 수 있도록 8개 bounded slot 중 최소 1개를 비워두세요/);
+    assert.match(prompt, /필요한 변경 파일이 8개 안에 들어오지 않으면 범위를 줄이세요/);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

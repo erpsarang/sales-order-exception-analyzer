@@ -5,35 +5,22 @@ import { join } from "node:path";
 import { createImplementContextPack } from "./context-pack.js";
 import { verifyImplementContract, type ImplementContract } from "./implement-contract.js";
 import {
-  createHandoffLineage,
-  HANDOFF_LINEAGE_FILE,
-  handoffTriggerFromGitHubEvent,
-  verifyHandoffLineage,
-} from "./lineage/handoff-lineage.js";
-import {
   createPlanImplementContract,
   createPlanImplementHandoffManifest,
-  createPlanRebindProvenance,
   PLAN_AUTHORIZE_WORKFLOW_PATH,
-  PLAN_REBIND_MAX_DRIFT_FILES,
   PLAN_WORKFLOW_PATH,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
-  validatePlanAuthorizeSourceForRebind,
   verifyPlanAuthorizeArtifact,
-  verifyPlanRebindProvenance,
   type PlanAuthorizeArtifactMetadata,
-  type PlanRebindProvenance,
   type PlanAuthorizeSourceRun,
 } from "./plan-implement-handoff.js";
 import { planAuthorizeArtifactName, type PlanAuthorizeArtifact } from "./plan-authorization.js";
 import { createSinglePassPrompt, WORKER_OUTPUT_SCHEMA } from "./single-pass-worker.js";
-import type { PlanImplementHandoffManifest } from "./plan-implement-handoff.js";
 
 interface SourceRecord {
   readonly authorization: PlanAuthorizeArtifact;
   readonly sourceArtifact: PlanAuthorizeArtifactMetadata;
-  readonly rebind?: PlanRebindProvenance;
 }
 
 function required(name: string): string {
@@ -161,9 +148,7 @@ async function prepare(): Promise<void> {
   if (source.id !== sourceRunId || source.runAttempt !== sourceRunAttempt) {
     throw new Error("selected PLAN_AUTHORIZE run identity changed");
   }
-  const rebindTargetSha = process.env.REBIND_TARGET_SHA?.trim();
-  if (rebindTargetSha) validatePlanAuthorizeSourceForRebind(authorization, source, rebindTargetSha);
-  else validatePlanAuthorizeSource(authorization, source);
+  validatePlanAuthorizeSource(authorization, source);
 
   const sourceArtifactsResponse = await api<any>(`/repos/${owner}/${repo}/actions/runs/${sourceRunId}/artifacts?per_page=100`);
   const sourceMatches = (sourceArtifactsResponse.artifacts ?? []).filter((item: any) => item.name === sourceArtifact.name && !item.expired);
@@ -194,36 +179,23 @@ async function prepare(): Promise<void> {
   assertExactArtifact(exactPlan[0], authorization.plan.artifact, "approved PLAN");
   assertExactArtifact(exactProvenance[0], authorization.plan.provenanceArtifact, "approved PLAN provenance");
 
-  const planJson = await readArtifactJson(authorization.plan.artifact.id, "PLAN.json");
-  let rebind: PlanRebindProvenance | undefined;
-  if (rebindTargetSha) {
-    if (currentDefaultSha !== rebindTargetSha) throw new Error("PLAN rebind target moved during prepare");
-    const comparison = await api<any>(
-      `/repos/${owner}/${repo}/compare/${authorization.targetSha}...${rebindTargetSha}`,
-    );
-    const files: any[] = comparison.files ?? [];
-    if (
-      comparison.status !== "ahead" ||
-      comparison.merge_base_commit?.sha !== authorization.targetSha ||
-      files.length < 1 ||
-      files.length > PLAN_REBIND_MAX_DRIFT_FILES
-    ) {
-      throw new Error("PLAN rebind drift is not a bounded ancestor diff");
-    }
-    const rejected = files.filter((file) => !["added", "modified"].includes(String(file.status ?? "")));
-    if (rejected.length > 0) throw new Error("PLAN rebind drift contains unsupported file status");
-    const changedPaths = files.map((file) => String(file.filename ?? ""));
-    rebind = createPlanRebindProvenance(authorization, planJson, rebindTargetSha, changedPaths);
+  const requirementIssue = await api<any>(`/repos/${owner}/${repo}/issues/${authorization.requirement.issueNumber}`);
+  if (requirementIssue.pull_request || typeof requirementIssue.title !== "string" || !requirementIssue.title.trim()) {
+    throw new Error("approved Requirement Issue snapshot is invalid");
   }
+  if (requirementIssue.body !== null && typeof requirementIssue.body !== "string") {
+    throw new Error("approved Requirement Issue body is invalid");
+  }
+  const requirementSnapshot = {
+    title: requirementIssue.title,
+    body: requirementIssue.body ?? null,
+  };
 
-  const contract = createPlanImplementContract(authorization, planJson, rebind);
+  const planJson = await readArtifactJson(authorization.plan.artifact.id, "PLAN.json");
+  const contract = createPlanImplementContract(authorization, planJson, requirementSnapshot);
   verifyImplementContract(contract);
 
-  const sourceRecord: SourceRecord = {
-    authorization,
-    sourceArtifact,
-    ...(rebind ? { rebind } : {}),
-  };
+  const sourceRecord: SourceRecord = { authorization, sourceArtifact };
   writeFileSync(join(directory, "contract.json"), JSON.stringify(contract, null, 2));
   writeFileSync(join(directory, "source.json"), JSON.stringify(sourceRecord, null, 2));
 
@@ -239,7 +211,6 @@ function buildContext(): void {
   verifyImplementContract(contract);
   const source = JSON.parse(readFileSync(join(directory, "source.json"), "utf8")) as SourceRecord;
   const authorization = verifyPlanAuthorizeArtifact(source.authorization);
-  const rebind = source.rebind ? verifyPlanRebindProvenance(source.rebind, authorization) : undefined;
 
   const context = createImplementContextPack(contract, targetRoot, observedBaseSha);
   const prompt = createSinglePassPrompt(contract, context);
@@ -248,7 +219,6 @@ function buildContext(): void {
     sourceArtifact: source.sourceArtifact,
     contract,
     contextDigest: context.contextDigest,
-    ...(rebind ? { rebind } : {}),
   });
 
   writeFileSync(join(directory, "context.json"), JSON.stringify(context, null, 2));
@@ -257,44 +227,7 @@ function buildContext(): void {
   writeFileSync(join(directory, "handoff.json"), JSON.stringify(manifest, null, 2));
 }
 
-/**
- * Canonical Execution Lineage shadow (Step 2A).
- * 이미 만들어진 Handoff 산출물을 읽기만 하고, 별도 디렉터리에 lineage.json 하나만 쓴다.
- * 기존 Handoff 파일과 판정에는 영향을 주지 않는다.
- */
-function buildLineage(): void {
-  const directory = required("HANDOFF_OUTPUT");
-  const lineageDirectory = required("LINEAGE_OUTPUT");
-  const observedControlSha = required("OBSERVED_CONTROL_SHA");
-  const expectedControlSha = required("EXPECTED_CONTROL_SHA");
-  if (observedControlSha !== expectedControlSha) throw new Error("Handoff lineage control-plane checkout SHA mismatch");
-
-  const contract = JSON.parse(readFileSync(join(directory, "contract.json"), "utf8")) as ImplementContract;
-  const context = JSON.parse(readFileSync(join(directory, "context.json"), "utf8")) as { contextDigest: string };
-  const manifest = JSON.parse(readFileSync(join(directory, "handoff.json"), "utf8")) as PlanImplementHandoffManifest;
-  const source = JSON.parse(readFileSync(join(directory, "source.json"), "utf8")) as SourceRecord;
-
-  const lineage = createHandoffLineage({
-    authorization: source.authorization,
-    ...(source.rebind ? { rebind: source.rebind } : {}),
-    contract,
-    contextDigest: context.contextDigest,
-    manifest,
-    trigger: handoffTriggerFromGitHubEvent(required("HANDOFF_EVENT_NAME")),
-    producer: {
-      runId: positiveInteger("HANDOFF_RUN_ID"),
-      runAttempt: positiveInteger("HANDOFF_RUN_ATTEMPT"),
-      controlPlaneSha: observedControlSha,
-    },
-  });
-  verifyHandoffLineage(JSON.parse(JSON.stringify(lineage)));
-
-  mkdirSync(lineageDirectory, { recursive: true });
-  writeFileSync(join(lineageDirectory, HANDOFF_LINEAGE_FILE), JSON.stringify(lineage, null, 2));
-}
-
 const command = process.argv[2];
 if (command === "prepare") await prepare();
 else if (command === "context") buildContext();
-else if (command === "lineage") buildLineage();
-else throw new Error("usage: plan-implement-handoff-handler.ts <prepare|context|lineage>");
+else throw new Error("usage: plan-implement-handoff-handler.ts <prepare|context>");

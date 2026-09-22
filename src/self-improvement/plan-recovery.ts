@@ -1,8 +1,10 @@
-import { PLAN_TRIGGER_EVENTS } from "./lineage/sources.js";
 import type { PlanAuthorizeArtifact } from "./plan-authorization.js";
 
 const GIT_SHA = /^[0-9a-f]{40,64}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+
+// 정상 Read-only AI PLAN run이 가질 수 있는 event. plan-authorize / handoff handler와 같은 집합이다.
+const PLAN_TRIGGER_EVENTS: readonly string[] = ["workflow_dispatch", "issues"];
 
 export const PLAN_WORKFLOW_PATH = ".github/workflows/plan.yml" as const;
 export const MAX_AUTO_REPLAN_PER_AUTHORIZATION = 2 as const;
@@ -74,7 +76,7 @@ export function classifyPlanRecovery(
   if (
     planRun.name !== "Read-only AI PLAN" ||
     planRun.path !== PLAN_WORKFLOW_PATH ||
-    !(PLAN_TRIGGER_EVENTS as readonly string[]).includes(planRun.event) ||
+    !PLAN_TRIGGER_EVENTS.includes(planRun.event) ||
     planRun.status !== "completed" ||
     planRun.conclusion !== "success" ||
     planRun.headBranch !== defaultBranch ||

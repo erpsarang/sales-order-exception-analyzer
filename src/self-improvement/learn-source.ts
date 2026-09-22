@@ -387,37 +387,13 @@ export function createTrustedLearnSourceArtifacts(
     },
   ];
 
-  const rawSeal = optionalObjectPath(orchestration, [
-    "sourceReview", "sourceVerify", "sourcePublish", "sourceSeal",
-  ]);
-  const hasSourceFix = rawSeal !== undefined && Object.hasOwn(rawSeal, "sourceFix");
-  if (hasSourceFix) {
-    const verifiedFixCycle = validateVerifyProvenanceForReview({
-      verify: sourceReview.sourceVerify,
-      verifyArtifactName: requiredString(
-        sourceReview,
-        "sourceVerifyArtifactName",
-        "sourceReview.sourceVerifyArtifactName",
-      ),
-      repository: facts.repository,
-    });
-    if (verifiedFixCycle.sourcePublish.sourceSeal.sourceFix === undefined) {
-      throw new Error("FIX cycle source marker does not match validated SEAL provenance");
-    }
-  }
-
   const planSource = optionalObjectPath(orchestration, [
     "sourceReview", "sourceVerify", "sourcePublish", "sourceSeal", "sourcePlanBridge",
   ]);
   const bridge = planSource === undefined ? undefined : asObject("sourcePlanBridge.bridge", planSource.bridge);
   // Older recovery-only records have no execution provenance.
   const recoveryOnly = bridge !== undefined && Object.keys(bridge).length === 1 && Object.hasOwn(bridge, "recoveryGuard");
-  if (bridge !== undefined && !recoveryOnly && !hasSourceFix) {
-    // Only a direct PLAN candidate can contribute exact test-execution evidence.
-    // FIX cycles have a different final candidate; reusing the original PLAN validation
-    // would misrepresent historical execution as validation of the final FIX candidate.
-    // validateVerifyProvenanceForReview() already validates the final FIX → SEAL → PUBLISH
-    // → VERIFY chain before this optional evidence projection.
+  if (bridge !== undefined && !recoveryOnly) {
     // Validate the original nested objects, before projecting or bounding their content.
     // This includes the canonical validation/bridge digests and artifact/run bindings.
     const verify = validateVerifyProvenanceForReview({

@@ -1,27 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPlanAuthorizeArtifact, type PlanAuthorizeArtifact } from "../src/self-improvement/plan-authorization.js";
+import { createPlanAuthorizeArtifact, requirementDigest, type PlanAuthorizeArtifact } from "../src/self-improvement/plan-authorization.js";
 import {
   createPlanImplementContract,
   createPlanImplementHandoffManifest,
-  createPlanRebindProvenance,
   PLAN_IMPLEMENT_MAX_CONTEXT_BYTES,
   PLAN_IMPLEMENT_MAX_PATCH_BYTES,
-  PLAN_REBIND_MAX_DRIFT_FILES,
   planImplementHandoffArtifactName,
   validatePlanAuthorizeSource,
-  validatePlanAuthorizeSourceForRebind,
   verifyPlanAuthorizeArtifact,
-  verifyPlanRebindProvenance,
   type PlanAuthorizeSourceRun,
 } from "../src/self-improvement/plan-implement-handoff.js";
 
 const targetSha = "b".repeat(40);
+const requirementSnapshot = {
+  title: "Framework 실행 상태를 사람이 이해하기 쉬운 한국어로 표시",
+  body: "approved Requirement body",
+} as const;
+const approvedRequirementDigest = requirementDigest(requirementSnapshot.title, requirementSnapshot.body);
 
 function authorization(): PlanAuthorizeArtifact {
   return createPlanAuthorizeArtifact({
     normalizedPlan: {
-      requirement: { issueNumber: 83, digest: "a".repeat(64) },
+      requirement: { issueNumber: 83, digest: approvedRequirementDigest },
       repository: "erpsarang/self-improvement-mvp",
       targetSha,
       plan: {
@@ -40,7 +41,7 @@ function authorization(): PlanAuthorizeArtifact {
       id: 10308236589,
       digest: "d".repeat(64),
     },
-    currentRequirementDigest: "a".repeat(64),
+    currentRequirementDigest: approvedRequirementDigest,
     currentTargetSha: targetSha,
     approvalCommentId: 5649698571,
     approverUserId: 8370921,
@@ -78,6 +79,7 @@ const readyPlan = {
       ".github/workflows/plan.yml",
       "test/human-status.test.ts",
     ],
+    contextPaths: ["src/self-improvement/implement-contract.ts"],
     requiredChanges: [
       "6개 HumanStatus의 현재 상황과 다음 행동을 한국어로 반환한다",
       "PLAN 출력에 사람용 상태 요약을 연결한다",
@@ -115,13 +117,15 @@ test("canonical PLAN.json wrapper와 ready scope를 deterministic ImplementContr
   assert.doesNotThrow(() => verifyPlanAuthorizeArtifact(approved));
   assert.doesNotThrow(() => validatePlanAuthorizeSource(approved, source()));
 
-  const contract = createPlanImplementContract(approved, canonicalPlanArtifact());
+  const contract = createPlanImplementContract(approved, canonicalPlanArtifact(), requirementSnapshot);
   assert.equal(contract.baseSha, targetSha);
   assert.equal(contract.requirement.issueNumber, 83);
+  assert.deepEqual(contract.requirementSnapshot, requirementSnapshot);
   assert.equal(contract.approvedPlan.runId, 34727609462);
   assert.equal(contract.approvedPlan.runAttempt, 2);
   assert.equal(contract.approval.commentId, 5649698571);
   assert.equal(contract.scope.maxFilesChanged, 3);
+  assert.deepEqual(contract.scope.contextPaths, ["src/self-improvement/implement-contract.ts"]);
   assert.equal(contract.scope.maxContextBytes, PLAN_IMPLEMENT_MAX_CONTEXT_BYTES);
   assert.equal(contract.scope.maxPatchBytes, PLAN_IMPLEMENT_MAX_PATCH_BYTES);
   assert.deepEqual(contract.scope.requiredChanges, [
@@ -131,6 +135,19 @@ test("canonical PLAN.json wrapper와 ready scope를 deterministic ImplementContr
   assert.deepEqual(contract.scope.forbiddenChanges, readyPlan.implementationScope.forbiddenChanges);
   assert.deepEqual(contract.scope.validationCommands, ["npm test"]);
   assert.match(contract.contractDigest, /^[0-9a-f]{64}$/);
+});
+
+
+test("approved Requirement snapshot이 digest와 다르면 re-plan required로 fail-closed 한다", () => {
+  const approved = authorization();
+  assert.throws(
+    () => createPlanImplementContract(
+      approved,
+      canonicalPlanArtifact(),
+      { title: requirementSnapshot.title, body: "changed after approval" },
+    ),
+    /requirementSnapshot digest mismatch; re-plan required/,
+  );
 });
 
 test("package.json 변경 승인에는 package-lock.json을 deterministic companion으로 결합한다", () => {
@@ -146,7 +163,7 @@ test("package.json 변경 승인에는 package-lock.json을 deterministic compan
     },
   };
 
-  const contract = createPlanImplementContract(approved, canonicalPlanArtifact(webPlan));
+  const contract = createPlanImplementContract(approved, canonicalPlanArtifact(webPlan), requirementSnapshot);
 
   assert.deepEqual(contract.scope.allowedPaths, [
     "package-lock.json",
@@ -179,89 +196,9 @@ test("package.json companion이 8-file bounded scope를 넘기면 fail-closed �
   };
 
   assert.throws(
-    () => createPlanImplementContract(approved, canonicalPlanArtifact(saturatedPlan)),
+    () => createPlanImplementContract(approved, canonicalPlanArtifact(saturatedPlan), requirementSnapshot),
     /package-lock\.json within bounded scope/,
   );
-});
-
-test("Framework-only drift는 기존 Human 승인 PLAN을 current SHA에 trusted rebind한다", () => {
-  const approved = authorization();
-  const reboundTargetSha = "e".repeat(40);
-  const changedPaths = [
-    "src/self-improvement/deterministic-ci.ts",
-    "test/deterministic-ci.test.ts",
-  ];
-  const planValue = canonicalPlanArtifact();
-  const rebind = createPlanRebindProvenance(approved, planValue, reboundTargetSha, changedPaths);
-  assert.doesNotThrow(() => verifyPlanRebindProvenance(rebind, approved));
-  assert.deepEqual(rebind.changedPaths, changedPaths);
-
-  const contract = createPlanImplementContract(approved, planValue, rebind);
-  assert.equal(contract.baseSha, reboundTargetSha);
-
-  const sourceArtifact = {
-    name: "plan-authorize-issue-83-plan-34727609462-attempt-2-approval-5649698571-run-34728260819-attempt-1",
-    id: 10309140730,
-    digest: "f".repeat(64),
-  };
-  const handoff = createPlanImplementHandoffManifest({
-    authorization: approved,
-    sourceArtifact,
-    contract,
-    contextDigest: "1".repeat(64),
-    rebind,
-  });
-  assert.equal(handoff.baseSha, reboundTargetSha);
-  assert.equal(handoff.rebindDigest, rebind.rebindDigest);
-});
-
-test("PLAN rebind bounded drift는 16 files까지 허용하고 17 files부터 거부한다", () => {
-  const approved = authorization();
-  const reboundTargetSha = "e".repeat(40);
-  const planValue = canonicalPlanArtifact();
-  const sixteen = Array.from({ length: PLAN_REBIND_MAX_DRIFT_FILES }, (_, index) =>
-    `src/self-improvement/rebind-${String(index + 1).padStart(2, "0")}.ts`
-  );
-  const seventeen = [...sixteen, "src/self-improvement/rebind-17.ts"];
-
-  assert.equal(PLAN_REBIND_MAX_DRIFT_FILES, 16);
-  assert.doesNotThrow(() =>
-    createPlanRebindProvenance(approved, planValue, reboundTargetSha, sixteen)
-  );
-  assert.throws(
-    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, seventeen),
-    /exceeds bounded file count/,
-  );
-});
-
-test("PLAN rebind는 App drift 또는 승인 Context/Scope와 겹치는 drift를 fail-closed 한다", () => {
-  const approved = authorization();
-  const reboundTargetSha = "e".repeat(40);
-  const planValue = canonicalPlanArtifact();
-
-  assert.throws(
-    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, ["package.json"]),
-    /not framework-only/,
-  );
-  assert.throws(
-    () => createPlanRebindProvenance(approved, planValue, reboundTargetSha, [".github/workflows/plan.yml"]),
-    /overlaps approved PLAN context\/scope/,
-  );
-});
-
-test("rebind source는 old approved SHA와 current rebound SHA를 모두 exact 검증한다", () => {
-  const approved = authorization();
-  const reboundTargetSha = "e".repeat(40);
-  assert.doesNotThrow(() => validatePlanAuthorizeSourceForRebind(
-    approved,
-    source({ currentDefaultSha: reboundTargetSha }),
-    reboundTargetSha,
-  ));
-  assert.throws(() => validatePlanAuthorizeSourceForRebind(
-    approved,
-    source({ currentDefaultSha: "f".repeat(40) }),
-    reboundTargetSha,
-  ), /exact current default SHA/);
 });
 
 test("source workflow/run/SHA/default HEAD가 exact approval과 다르면 fail-closed 한다", () => {
@@ -289,23 +226,23 @@ test("PLAN_AUTHORIZE artifact 위변조를 digest 검증에서 거부한다", ()
 test("production handoff는 bare payload나 malformed canonical wrapper를 거부한다", () => {
   const approved = authorization();
   assert.throws(
-    () => createPlanImplementContract(approved, readyPlan),
+    () => createPlanImplementContract(approved, readyPlan, requirementSnapshot),
     /wrapper shape/,
   );
   assert.throws(
-    () => createPlanImplementContract(approved, { ...canonicalPlanArtifact(), plan: undefined }),
+    () => createPlanImplementContract(approved, { ...canonicalPlanArtifact(), plan: undefined }, requirementSnapshot),
     /plan is invalid/,
   );
   assert.throws(
-    () => createPlanImplementContract(approved, canonicalPlanArtifact(readyPlan, { repository: "other/repo" })),
+    () => createPlanImplementContract(approved, canonicalPlanArtifact(readyPlan, { repository: "other/repo" }), requirementSnapshot),
     /repository mismatch/,
   );
   assert.throws(
-    () => createPlanImplementContract(approved, canonicalPlanArtifact(readyPlan, { sha: "e".repeat(40) })),
+    () => createPlanImplementContract(approved, canonicalPlanArtifact(readyPlan, { sha: "e".repeat(40) }), requirementSnapshot),
     /SHA mismatch/,
   );
   assert.throws(
-    () => createPlanImplementContract(approved, { ...canonicalPlanArtifact(), extra: true }),
+    () => createPlanImplementContract(approved, { ...canonicalPlanArtifact(), extra: true }, requirementSnapshot),
     /wrapper shape/,
   );
 });
@@ -316,6 +253,7 @@ test("approved PLAN approach는 bounded 문자열 배열만 handoff한다", () =
     () => createPlanImplementContract(
       approved,
       canonicalPlanArtifact({ ...readyPlan, approach: undefined }),
+      requirementSnapshot,
     ),
     /invalid approach/,
   );
@@ -323,6 +261,7 @@ test("approved PLAN approach는 bounded 문자열 배열만 handoff한다", () =
     () => createPlanImplementContract(
       approved,
       canonicalPlanArtifact({ ...readyPlan, approach: ["정상 지침", 1] }),
+      requirementSnapshot,
     ),
     /invalid approach/,
   );
@@ -330,6 +269,7 @@ test("approved PLAN approach는 bounded 문자열 배열만 handoff한다", () =
     () => createPlanImplementContract(
       approved,
       canonicalPlanArtifact({ ...readyPlan, approach: Array.from({ length: 9 }, (_, index) => `지침-${index}`) }),
+      requirementSnapshot,
     ),
     /approach exceeds/,
   );
@@ -341,11 +281,12 @@ test("ready=false, blocking question, unsafe scope와 비허용 검증 명령은
     () => createPlanImplementContract(
       approved,
       canonicalPlanArtifact({ ...readyPlan, implementationScope: { ...readyPlan.implementationScope, ready: false } }),
+      requirementSnapshot,
     ),
     /not ready/,
   );
   assert.throws(
-    () => createPlanImplementContract(approved, canonicalPlanArtifact({ ...readyPlan, questions: ["결정 필요"] })),
+    () => createPlanImplementContract(approved, canonicalPlanArtifact({ ...readyPlan, questions: ["결정 필요"] }), requirementSnapshot),
     /blocking questions/,
   );
   assert.throws(
@@ -355,6 +296,18 @@ test("ready=false, blocking question, unsafe scope와 비허용 검증 명령은
         ...readyPlan,
         implementationScope: { ...readyPlan.implementationScope, allowedPaths: ["../secret"] },
       }),
+      requirementSnapshot,
+    ),
+    /unsafe approved PLAN path/,
+  );
+  assert.throws(
+    () => createPlanImplementContract(
+      approved,
+      canonicalPlanArtifact({
+        ...readyPlan,
+        implementationScope: { ...readyPlan.implementationScope, contextPaths: ["../secret"] },
+      }),
+      requirementSnapshot,
     ),
     /unsafe approved PLAN path/,
   );
@@ -365,6 +318,7 @@ test("ready=false, blocking question, unsafe scope와 비허용 검증 명령은
         ...readyPlan,
         implementationScope: { ...readyPlan.implementationScope, validationCommands: ["npm install"] },
       }),
+      requirementSnapshot,
     ),
     /untrusted approved validation command/,
   );
@@ -372,7 +326,7 @@ test("ready=false, blocking question, unsafe scope와 비허용 검증 명령은
 
 test("handoff identity는 approval, Contract, Context digest에 결합된다", () => {
   const approved = authorization();
-  const contract = createPlanImplementContract(approved, canonicalPlanArtifact());
+  const contract = createPlanImplementContract(approved, canonicalPlanArtifact(), requirementSnapshot);
   const sourceArtifact = {
     name: "plan-authorize-issue-83-plan-34727609462-attempt-2-approval-5649698571-run-34728260819-attempt-1",
     id: 10309140730,

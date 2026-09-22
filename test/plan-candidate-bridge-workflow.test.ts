@@ -24,7 +24,6 @@ test("자동 경로는 Worker artifact의 exact Handoff identity로 recovery 여
   assert.match(bridgeSection, /const explicitRecovery = context\.eventName === 'workflow_dispatch'/);
   assert.equal(bridgeSection.includes("handoff-(\\\\d+)-attempt-(\\\\d+)-worker-"), true);
   assert.match(bridgeSection, /Trusted PLAN IMPLEMENT Handoff/);
-  assert.match(bridgeSection, /!\['workflow_run', 'issue_comment'\]\.includes\(handoff\.event\)/);
   assert.match(bridgeSection, /const approvedBaseSha = handoff\.head_sha/);
   assert.match(bridgeSection, /const recovery = explicitRecovery \|\| run\.head_sha !== approvedBaseSha/);
   assert.match(bridgeSection, /core\.setOutput\('worker_head_sha', run\.head_sha\)/);
@@ -66,7 +65,6 @@ test("recovery default 이동은 bounded Framework-only compare에만 trusted gu
   assert.match(bridgeSection, /'test\/plan-implement-worker\.test\.ts'/);
   assert.match(bridgeSection, /'test\/plan-worker-recovery-preflight-workflow\.test\.ts'/);
   assert.match(bridgeSection, /'test\/plan-trusted-rail-recovery-source\.test\.ts'/);
-  assert.match(bridgeSection, /'test\/review-workflow\.test\.ts'/);
   assert.match(bridgeSection, /'test\/seal-workflow\.test\.ts'/);
   assert.match(bridgeSection, /path\.startsWith\('test\/self-improvement\/'\) \|\| frameworkRootTests\.has\(path\)/);
   assert.doesNotMatch(bridgeSection, /path\.startsWith\('test\/'\)\s*\|\|/);
