@@ -14,6 +14,48 @@ const tableBody = exceptionTable.querySelector("tbody")!;
 const emptyMessage = document.querySelector<HTMLElement>("#empty-message")!;
 let exceptionCsv = "";
 
+const uploadHelp = document.createElement("section");
+uploadHelp.id = "csv-upload-help";
+const uploadHelpHeading = document.createElement("h2");
+uploadHelpHeading.textContent = "CSV 양식과 입력 예시";
+uploadHelp.append(uploadHelpHeading);
+for (const text of [
+  "기본 주문 필수 열 4개: orderId (예: EXAMPLE-001), customerId (예: EXAMPLE-C001), materialId (예: EXAMPLE-M001), orderQuantity (주문수량, 예: 10).",
+  "업무 기준값 열 3개: availableQuantity (가용재고, 예: 20), customerBlocked (고객 차단 여부), materialBlocked (자재 차단 여부). 실제 업무 기준을 입력할 때는 이 3개 열을 모두 포함하세요. 기준값을 포함한 양식의 필수 열은 총 7개입니다.",
+  "기본 주문 열만 업로드하면 로컬 예제 기준을 사용합니다. 이는 운영 데이터가 아니므로 실제 출고 판단에는 업무 기준값 3개 열을 모두 입력하세요.",
+  "customerBlocked와 materialBlocked는 소문자 true가 차단, false가 미차단입니다. 주문수량과 가용재고는 숫자로 입력하세요.",
+  "선택 열: estimatedAmount (예상금액, 예: 150000), dueDate (납기일, 예: 2026-10-01), orderComment (주문 코멘트, 예: 예제 주문). 선택 열은 생략하거나 셀을 비워 둘 수 있습니다.",
+]) {
+  const paragraph = document.createElement("p");
+  paragraph.textContent = text;
+  uploadHelp.append(paragraph);
+}
+const templateNotice = document.createElement("p");
+templateNotice.textContent = "다운로드 파일은 정상 주문 1건과 차단·재고 부족 주문 1건을 담은 예제 데이터입니다. 실제 주문 분석 시 예제 주문 데이터와 가용재고·고객 및 자재 차단 여부를 실제 업무 기준값으로 교체하세요.";
+const templateDownloadButton = document.createElement("button");
+templateDownloadButton.type = "button";
+templateDownloadButton.textContent = "예제 CSV 양식 다운로드";
+uploadHelp.append(templateNotice, templateDownloadButton);
+// 파일 입력이 label 안에 있어도 다운로드 버튼은 독립적인 요소로 배치한다.
+const uploadAnchor = fileInput.closest?.("label") ?? fileInput;
+uploadAnchor.insertAdjacentElement?.("afterend", uploadHelp);
+
+templateDownloadButton.addEventListener("click", async () => {
+  const { createOrderCsvTemplate } = await import("./order-csv-template.js");
+  const url = URL.createObjectURL(new Blob([createOrderCsvTemplate()], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "example-order-template.csv";
+  try {
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    // 다운로드 시작 후 임시 URL을 해제한다.
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+});
+
 const headerRow = document.createElement("tr");
 for (const label of ["주문번호", "자재", "수량", "가용재고", "부족 수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"]) {
   const header = document.createElement("th");
