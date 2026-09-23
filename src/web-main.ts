@@ -85,7 +85,29 @@ analyzeButton.addEventListener("click", async () => {
     for (const item of batch.exceptionWorklist) {
       const order = orders[item.resultIndex]!;
       const row = document.createElement("tr");
-      row.append(cell(order.orderId), cell(order.materialId), cell(order.orderQuantity), cell(order.customerId), cell(order.estimatedAmount), cell(order.dueDate), cell(order.orderComment), cell(item.exceptionGuides.map((guide) => guide.reasonCode).join(", ")));
+      const reasonCell = document.createElement("td");
+      reasonCell.className = "exception-guides-cell";
+      const guideList = document.createElement("ul");
+      guideList.className = "exception-guides";
+      for (const guide of item.exceptionGuides) {
+        const guideItem = document.createElement("li");
+        const reasonCode = document.createElement("strong");
+        reasonCode.textContent = guide.reasonCode;
+        const details = document.createElement("dl");
+        const checkLabel = document.createElement("dt");
+        checkLabel.textContent = "확인 사항";
+        const check = document.createElement("dd");
+        check.textContent = guide.check;
+        const actionLabel = document.createElement("dt");
+        actionLabel.textContent = "조치 안내";
+        const action = document.createElement("dd");
+        action.textContent = guide.action;
+        details.append(checkLabel, check, actionLabel, action);
+        guideItem.append(reasonCode, details);
+        guideList.append(guideItem);
+      }
+      reasonCell.append(guideList);
+      row.append(cell(order.orderId), cell(order.materialId), cell(order.orderQuantity), cell(order.customerId), cell(order.estimatedAmount), cell(order.dueDate), cell(order.orderComment), reasonCell);
       tableBody.append(row);
     }
     const hasExceptions = batch.exceptionWorklist.length > 0;
