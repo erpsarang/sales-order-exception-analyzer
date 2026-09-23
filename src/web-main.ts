@@ -1,6 +1,7 @@
 import "./web-styles.css";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
-import { createExceptionCsv, parseCsvOrders, validateOrders } from "./order-csv.js";
+import { createExceptionCsv, parseCsvOrdersForUpload, validateOrders } from "./order-csv.js";
+import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
 
 const fileInput = document.querySelector<HTMLInputElement>("#csv-file")!;
@@ -74,7 +75,7 @@ analyzeButton.addEventListener("click", async () => {
   clearError();
   analyzeButton.disabled = true;
   try {
-    const orders = parseCsvOrders(await file.text());
+    const orders = parseCsvOrdersForUpload(await file.text(), localDecisionContextProvider);
     validateOrders(orders);
     const batch = analyzeOrderBatch(orders);
     setText("#total-count", batch.summary.totalCount);

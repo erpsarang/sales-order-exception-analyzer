@@ -1,5 +1,6 @@
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import type { OrderInput } from "./order-analysis.js";
+import { enrichOrder, type BusinessOrder, type DecisionContextProvider } from "./decision-context.js";
 
 const requiredStringFields = ["orderId", "customerId", "materialId"] as const;
 const requiredNumberFields = ["orderQuantity", "availableQuantity"] as const;
@@ -72,6 +73,14 @@ function csvError(row: number, field: string, message: string): Error {
 }
 
 export function parseCsvOrders(source: string): OrderInput[] {
+  return parseOrderRows(source);
+}
+
+export function parseCsvOrdersForUpload(source: string, provider: DecisionContextProvider): OrderInput[] {
+  return parseOrderRows(source, provider);
+}
+
+function parseOrderRows(source: string, provider?: DecisionContextProvider): OrderInput[] {
   const rows = parseCsv(source);
   const header = rows.shift();
   if (!header) throw new Error("CSV 헤더가 필요합니다.");
@@ -82,10 +91,14 @@ export function parseCsvOrders(source: string): OrderInput[] {
     if (fields.has(field)) throw new Error(`CSV 헤더 오류: ${field} 필드가 중복되었습니다.`);
     fields.add(field);
   }
-  for (const field of [...requiredStringFields, ...requiredNumberFields, ...requiredBooleanFields]) {
+  const businessOnly = provider !== undefined && ["availableQuantity", ...requiredBooleanFields].every((field) => !fields.has(field));
+  const requiredFields = businessOnly
+    ? [...requiredStringFields, "orderQuantity"]
+    : [...requiredStringFields, ...requiredNumberFields, ...requiredBooleanFields];
+  for (const field of requiredFields) {
     if (!fields.has(field)) throw new Error(`CSV 헤더 오류: 필수 필드 ${field}이(가) 없습니다.`);
   }
-  return rows.map((row, index) => {
+  const orders = rows.map((row, index) => {
     const rowNumber = index + 1;
     if (row.length !== header.length) throw new Error(`CSV 데이터 ${rowNumber}번째 행: 헤더는 ${header.length}개 필드인데 ${row.length}개 필드가 있습니다.`);
     const values = Object.fromEntries(header.map((field, column) => [field, row[column]!])) as Record<CsvField, string>;
@@ -102,7 +115,7 @@ export function parseCsvOrders(source: string): OrderInput[] {
       if (value.trim() === "" || !Number.isFinite(number)) throw csvError(rowNumber, field, "유한한 숫자여야 합니다.");
       order[field] = number;
     }
-    for (const field of requiredBooleanFields) {
+    if (!businessOnly) for (const field of requiredBooleanFields) {
       const value = values[field];
       if (value !== "true" && value !== "false") throw csvError(rowNumber, field, "true 또는 false여야 합니다.");
       order[field] = value === "true";
@@ -111,8 +124,11 @@ export function parseCsvOrders(source: string): OrderInput[] {
       const value = values[field];
       if (value !== undefined && value !== "") order[field] = value;
     }
-    return order as unknown as OrderInput;
+    return order as unknown as BusinessOrder;
   });
+  // 모든 업무 필드 검증을 마친 뒤 조회하며, 실패 시 배열을 반환하지 않는다.
+  if (businessOnly && provider !== undefined) return orders.map((order) => enrichOrder(order, provider));
+  return orders as OrderInput[];
 }
 
 function escapeCsvCell(value: string | number | undefined): string {
