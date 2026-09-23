@@ -136,11 +136,15 @@ function escapeCsvCell(value: string | number | undefined): string {
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-export function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeof analyzeOrderBatch>): string {
-  const header = ["주문번호", "자재", "수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"];
+// 기존 호출의 CSV 형식은 보존하며 웹 다운로드는 재고 열을 명시적으로 포함한다.
+export function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeof analyzeOrderBatch>, includeStock = false): string {
+  const header = ["주문번호", "자재", "수량", ...(includeStock ? ["가용재고", "부족 수량"] : []), "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"];
   const rows = batch.exceptionWorklist.map((item) => {
     const order = orders[item.resultIndex]!;
-    return [order.orderId, order.materialId, order.orderQuantity, order.customerId, order.estimatedAmount, order.dueDate, order.orderComment, item.exceptionGuides.map((guide) => guide.reasonCode).join(", ")].map(escapeCsvCell).join(",");
+    const shortage = item.reasonCodes.includes("INSUFFICIENT_STOCK")
+      ? order.orderQuantity - order.availableQuantity
+      : undefined;
+    return [order.orderId, order.materialId, order.orderQuantity, ...(includeStock ? [order.availableQuantity, shortage] : []), order.customerId, order.estimatedAmount, order.dueDate, order.orderComment, item.exceptionGuides.map((guide) => guide.reasonCode).join(", ")].map(escapeCsvCell).join(",");
   });
   return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
 }
