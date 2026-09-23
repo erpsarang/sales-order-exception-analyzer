@@ -13,6 +13,21 @@ const exceptionTable = document.querySelector<HTMLTableElement>("#exception-tabl
 const tableBody = exceptionTable.querySelector("tbody")!;
 const emptyMessage = document.querySelector<HTMLElement>("#empty-message")!;
 let exceptionCsv = "";
+let executionId = 0;
+let resultExecutionId: number | undefined;
+let resultFile: File | undefined;
+
+const analysisStatus = document.createElement("p");
+analysisStatus.id = "analysis-status";
+analysisStatus.setAttribute?.("role", "status");
+analysisStatus.setAttribute?.("aria-live", "polite");
+resultSection.insertAdjacentElement?.("beforebegin", analysisStatus);
+function promptForAnalysis(): void {
+  analysisStatus.textContent = fileInput.files?.[0]
+    ? "선택한 CSV 파일을 분석하려면 분석하기 버튼을 누르세요."
+    : "분석할 CSV 파일을 선택하세요.";
+}
+promptForAnalysis();
 
 const uploadHelp = document.createElement("section");
 uploadHelp.id = "csv-upload-help";
@@ -91,6 +106,32 @@ function clearReference(): void {
   referenceSection.replaceChildren();
 }
 
+function resetAnalysis(): void {
+  clearReference();
+  clearError();
+  resultSection.hidden = true;
+  downloadButton.hidden = true;
+  exceptionCsv = "";
+  resultExecutionId = undefined;
+  resultFile = undefined;
+  tableBody.replaceChildren();
+  exceptionTable.hidden = true;
+  emptyMessage.hidden = true;
+  for (const selector of ["#total-count", "#ready-count", "#exception-count"]) {
+    document.querySelector<HTMLElement>(selector)!.textContent = "";
+  }
+  exceptionRateValue.textContent = "";
+  reasonCountsValue.replaceChildren();
+  topReasonValue.textContent = "";
+}
+
+fileInput.addEventListener("change", () => {
+  executionId += 1;
+  resetAnalysis();
+  analyzeButton.disabled = false;
+  promptForAnalysis();
+});
+
 function renderReference(upload: CsvUploadResult): void {
   clearReference();
   if (upload.referenceSource !== "provider" || upload.orders.length === 0) return;
@@ -161,19 +202,23 @@ function cell(value: string | number | undefined): HTMLTableCellElement {
 }
 
 analyzeButton.addEventListener("click", async () => {
-  clearReference();
-  resultSection.hidden = true;
-  downloadButton.hidden = true;
-  exceptionCsv = "";
+  const currentExecutionId = ++executionId;
+  resetAnalysis();
   const file = fileInput.files?.[0];
   if (!file) {
+    analyzeButton.disabled = false;
+    promptForAnalysis();
     showError("분석할 CSV 파일을 선택하세요.");
     return;
   }
-  clearError();
+  const isCurrentExecution = (): boolean =>
+    currentExecutionId === executionId && fileInput.files?.[0] === file;
+  analysisStatus.textContent = "선택한 CSV 파일을 분석하고 있습니다.";
   analyzeButton.disabled = true;
   try {
-    const upload = parseCsvUpload(await file.text(), localDecisionContextProvider);
+    const text = await file.text();
+    if (!isCurrentExecution()) return;
+    const upload = parseCsvUpload(text, localDecisionContextProvider);
     const { orders } = upload;
     validateOrders(orders);
     const batch = analyzeOrderBatch(orders);
@@ -216,22 +261,26 @@ analyzeButton.addEventListener("click", async () => {
     const hasExceptions = batch.exceptionWorklist.length > 0;
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
-    downloadButton.hidden = !hasExceptions;
     exceptionCsv = createExceptionCsv(orders, batch, true);
     renderReference(upload);
+    resultExecutionId = currentExecutionId;
+    resultFile = file;
+    downloadButton.hidden = !hasExceptions;
     resultSection.hidden = false;
+    analysisStatus.textContent = "選택한 CSV 파일의 분석이 완료되었습니다.";
   } catch (error) {
-    clearReference();
-    exceptionCsv = "";
-    downloadButton.hidden = true;
-    resultSection.hidden = true;
+    if (!isCurrentExecution()) return;
+    resetAnalysis();
     showError(error instanceof Error ? error.message : "CSV 분석에 실패했습니다.");
+    analysisStatus.textContent = "CSV 분석에 실패했습니다. 파일을 확인한 뒤 다시 분석하세요.";
   } finally {
-    analyzeButton.disabled = false;
+    if (isCurrentExecution()) analyzeButton.disabled = false;
   }
 });
 
 downloadButton.addEventListener("click", () => {
+  if (resultExecutionId !== executionId || !resultFile || resultFile !== fileInput.files?.[0]
+    || resultSection.hidden || downloadButton.hidden || !exceptionCsv) return;
   const url = URL.createObjectURL(new Blob([exceptionCsv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
