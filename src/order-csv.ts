@@ -72,15 +72,25 @@ function csvError(row: number, field: string, message: string): Error {
   return new Error(`CSV 데이터 ${row}번째 행 ${field}: ${message}`);
 }
 
+export interface CsvUploadResult {
+  orders: OrderInput[];
+  referenceSource: "csv" | "provider";
+}
+
 export function parseCsvOrders(source: string): OrderInput[] {
-  return parseOrderRows(source);
+  return parseOrderRows(source).orders;
 }
 
 export function parseCsvOrdersForUpload(source: string, provider: DecisionContextProvider): OrderInput[] {
+  return parseCsvUpload(source, provider).orders;
+}
+
+/** 출처는 기준값 보완 분기로 결정하며 공급자의 데이터 성격은 호출자가 설명한다. */
+export function parseCsvUpload(source: string, provider: DecisionContextProvider): CsvUploadResult {
   return parseOrderRows(source, provider);
 }
 
-function parseOrderRows(source: string, provider?: DecisionContextProvider): OrderInput[] {
+function parseOrderRows(source: string, provider?: DecisionContextProvider): CsvUploadResult {
   const rows = parseCsv(source);
   const header = rows.shift();
   if (!header) throw new Error("CSV 헤더가 필요합니다.");
@@ -127,8 +137,10 @@ function parseOrderRows(source: string, provider?: DecisionContextProvider): Ord
     return order as unknown as BusinessOrder;
   });
   // 모든 업무 필드 검증을 마친 뒤 조회하며, 실패 시 배열을 반환하지 않는다.
-  if (businessOnly && provider !== undefined) return orders.map((order) => enrichOrder(order, provider));
-  return orders as OrderInput[];
+  if (businessOnly && provider !== undefined) {
+    return { orders: orders.map((order) => enrichOrder(order, provider)), referenceSource: "provider" };
+  }
+  return { orders: orders as OrderInput[], referenceSource: "csv" };
 }
 
 function escapeCsvCell(value: string | number | undefined): string {

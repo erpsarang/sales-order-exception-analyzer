@@ -1,6 +1,6 @@
 import "./web-styles.css";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
-import { createExceptionCsv, parseCsvOrdersForUpload, validateOrders } from "./order-csv.js";
+import { createExceptionCsv, parseCsvUpload, validateOrders, type CsvUploadResult } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
 
@@ -39,6 +39,49 @@ const reasonCountsValue = statistic("예외 사유별 건수");
 const topReasonValue = statistic("최다 사유");
 resultSection.prepend(statistics);
 
+const referenceSection = document.createElement("section");
+referenceSection.id = "reference-provenance";
+referenceSection.hidden = true;
+resultSection.prepend(referenceSection);
+
+function clearReference(): void {
+  referenceSection.hidden = true;
+  referenceSection.replaceChildren();
+}
+
+function renderReference(upload: CsvUploadResult): void {
+  clearReference();
+  if (upload.referenceSource !== "provider" || upload.orders.length === 0) return;
+  // 이 화면의 provider는 localDecisionContextProvider로 고정되어 있다.
+  const heading = document.createElement("h2");
+  heading.textContent = "예제 기준 분석";
+  const notice = document.createElement("p");
+  notice.textContent = "데이터 출처: 운영 데이터가 아닌 로컬 예제 기준입니다. 아래 가용재고와 고객·자재 차단 여부는 예제 값이며, 정상 판정도 실제 재고와 차단 상태를 확인한 결과가 아닙니다. 주문마다 같은 자재의 재고를 동일하게 적용하며 주문 간 재고를 차감하지 않습니다.";
+  const guidance = document.createElement("p");
+  guidance.textContent = "실제 출고 판단에는 availableQuantity, customerBlocked, materialBlocked 열에 업무 기준값을 포함한 CSV를 사용하세요.";
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = "전체 주문에 적용한 예제 기준값 (입력 행 번호는 헤더를 제외한 데이터 행 순서)";
+  const head = document.createElement("thead");
+  const row = document.createElement("tr");
+  for (const label of ["입력 행 번호", "주문번호", "고객", "자재", "가용재고 (예제)", "고객 차단 여부 (예제)", "자재 차단 여부 (예제)"]) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = label;
+    row.append(header);
+  }
+  head.append(row);
+  const body = document.createElement("tbody");
+  upload.orders.forEach((order, index) => {
+    const entry = document.createElement("tr");
+    entry.append(cell(index + 1), cell(order.orderId), cell(order.customerId), cell(order.materialId), cell(order.availableQuantity), cell(order.customerBlocked ? "차단 있음" : "차단 없음"), cell(order.materialBlocked ? "차단 있음" : "차단 없음"));
+    body.append(entry);
+  });
+  table.append(caption, head, body);
+  referenceSection.append(heading, notice, guidance, table);
+  referenceSection.hidden = false;
+}
+
 function renderSummary(display: OrderSummaryDisplay): void {
   exceptionRateValue.textContent = display.exceptionRateText;
   topReasonValue.textContent = display.topReasonText;
@@ -76,6 +119,10 @@ function cell(value: string | number | undefined): HTMLTableCellElement {
 }
 
 analyzeButton.addEventListener("click", async () => {
+  clearReference();
+  resultSection.hidden = true;
+  downloadButton.hidden = true;
+  exceptionCsv = "";
   const file = fileInput.files?.[0];
   if (!file) {
     showError("분석할 CSV 파일을 선택하세요.");
@@ -84,7 +131,8 @@ analyzeButton.addEventListener("click", async () => {
   clearError();
   analyzeButton.disabled = true;
   try {
-    const orders = parseCsvOrdersForUpload(await file.text(), localDecisionContextProvider);
+    const upload = parseCsvUpload(await file.text(), localDecisionContextProvider);
+    const { orders } = upload;
     validateOrders(orders);
     const batch = analyzeOrderBatch(orders);
     setText("#total-count", batch.summary.totalCount);
@@ -128,8 +176,12 @@ analyzeButton.addEventListener("click", async () => {
     emptyMessage.hidden = hasExceptions;
     downloadButton.hidden = !hasExceptions;
     exceptionCsv = createExceptionCsv(orders, batch, true);
+    renderReference(upload);
     resultSection.hidden = false;
   } catch (error) {
+    clearReference();
+    exceptionCsv = "";
+    downloadButton.hidden = true;
     resultSection.hidden = true;
     showError(error instanceof Error ? error.message : "CSV 분석에 실패했습니다.");
   } finally {
