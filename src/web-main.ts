@@ -14,6 +14,15 @@ const tableBody = exceptionTable.querySelector("tbody")!;
 const emptyMessage = document.querySelector<HTMLElement>("#empty-message")!;
 let exceptionCsv = "";
 
+const headerRow = document.createElement("tr");
+for (const label of ["주문번호", "자재", "수량", "가용재고", "부족 수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"]) {
+  const header = document.createElement("th");
+  header.scope = "col";
+  header.textContent = label;
+  headerRow.append(header);
+}
+exceptionTable.querySelector("thead")!.replaceChildren(headerRow);
+
 const statistics = document.createElement("dl");
 statistics.className = "exception-statistics";
 function statistic(label: string): HTMLElement {
@@ -85,6 +94,9 @@ analyzeButton.addEventListener("click", async () => {
     tableBody.replaceChildren();
     for (const item of batch.exceptionWorklist) {
       const order = orders[item.resultIndex]!;
+      const shortage = item.reasonCodes.includes("INSUFFICIENT_STOCK")
+        ? order.orderQuantity - order.availableQuantity
+        : undefined;
       const row = document.createElement("tr");
       const reasonCell = document.createElement("td");
       reasonCell.className = "exception-guides-cell";
@@ -108,14 +120,14 @@ analyzeButton.addEventListener("click", async () => {
         guideList.append(guideItem);
       }
       reasonCell.append(guideList);
-      row.append(cell(order.orderId), cell(order.materialId), cell(order.orderQuantity), cell(order.customerId), cell(order.estimatedAmount), cell(order.dueDate), cell(order.orderComment), reasonCell);
+      row.append(cell(order.orderId), cell(order.materialId), cell(order.orderQuantity), cell(order.availableQuantity), cell(shortage), cell(order.customerId), cell(order.estimatedAmount), cell(order.dueDate), cell(order.orderComment), reasonCell);
       tableBody.append(row);
     }
     const hasExceptions = batch.exceptionWorklist.length > 0;
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
     downloadButton.hidden = !hasExceptions;
-    exceptionCsv = createExceptionCsv(orders, batch);
+    exceptionCsv = createExceptionCsv(orders, batch, true);
     resultSection.hidden = false;
   } catch (error) {
     resultSection.hidden = true;
