@@ -59,34 +59,43 @@ for (const schema of schemas) {
       [schema.withId('"id" '), /닫는 큰따옴표 뒤/],
     ];
     for (const [row, reason] of cases) {
-      assert.throws(() => schema.create(`${schema.header}\n${schema.row}\n${row}`), (error: unknown) => {
-        assert.ok(error instanceof Error);
-        assert.match(error.message, new RegExp(`${schema.kind}.*3번째 행`));
-        assert.match(error.message, reason);
-        return true;
-      });
+      for (const prefix of ["", `${schema.row}\n`, `${schema.withId('"multi\nline"')}\n`]) {
+        const rowNumber = prefix === "" ? 1 : 2;
+        assert.throws(() => schema.create(`${schema.header}\n${prefix}${row}`), (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, new RegExp(`${schema.kind} 기준 CSV ${rowNumber}번째 행`));
+          assert.match(error.message, reason);
+          return true;
+        });
+      }
     }
-    assert.throws(() => schema.create(`${schema.header}\n\n`), new RegExp(`${schema.kind}.*2번째 행.*헤더는`));
+    assert.throws(() => schema.create(`${schema.header}\n\n`), new RegExp(`${schema.kind}.*1번째 행.*헤더는`));
+  });
+
+  test(`${schema.kind} CSV의 헤더 구문 오류는 데이터 행과 구분한다`, () => {
+    for (const source of ['"unterminated', 'bad"header', '"header"suffix']) {
+      assert.throws(() => schema.create(source), new RegExp(`${schema.kind} 기준 CSV 1번째 행 헤더 1번째 열:`));
+    }
   });
 
   test(`${schema.kind} CSV의 빈 식별자와 정확히 일치하는 중복을 거부한다`, () => {
     for (const id of ["", "   ", '"\t "']) {
-      assert.throws(() => schema.create(`${schema.header}\n${schema.withId(id)}`), new RegExp(`${schema.kind}.*2번째 행 ${schema.idField}.*비어 있지 않은`));
+      assert.throws(() => schema.create(`${schema.header}\n${schema.withId(id)}`), new RegExp(`${schema.kind}.*1번째 행 ${schema.idField}.*비어 있지 않은`));
     }
-    assert.throws(() => schema.create(`${schema.header}\n${schema.row}\n${schema.row}`), new RegExp(`${schema.kind}.*3번째 행 ${schema.idField}.*2번째 행과 중복`));
-    assert.throws(() => schema.create(`${schema.header}\n${schema.withId('"same"')}\n${schema.withId("same")}`), new RegExp(`${schema.kind}.*3번째 행.*same.*중복`));
+    assert.throws(() => schema.create(`${schema.header}\n${schema.row}\n${schema.row}`), new RegExp(`${schema.kind}.*2번째 행 ${schema.idField}.*1번째 행과 중복`));
+    assert.throws(() => schema.create(`${schema.header}\n${schema.withId('"same"')}\n${schema.withId("same")}`), new RegExp(`${schema.kind}.*2번째 행.*same.*중복`));
   });
 
   test(`${schema.kind} CSV는 소문자 true/false만 허용한다`, () => {
     for (const value of ["", "TRUE", "False", "0", "1", "yes", " true", "false ", "null"]) {
-      assert.throws(() => schema.create(`${schema.header}\n${schema.withBoolean(value)}`), new RegExp(`${schema.kind}.*2번째 행 ${schema.blockedField}.*true 또는 false`));
+      assert.throws(() => schema.create(`${schema.header}\n${schema.withBoolean(value)}`), new RegExp(`${schema.kind}.*1번째 행 ${schema.blockedField}.*true 또는 false`));
     }
   });
 }
 
 test("재고는 빈 값, 숫자가 아닌 값과 비유한 숫자를 거부한다", () => {
   for (const value of ["", "  ", "nope", "NaN", "Infinity", "-Infinity", "1e309"]) {
-    assert.throws(() => createCsvDecisionContextProvider(customerCsv, `${materialHeader}\nM-1,false,20\nM-2,true,${value}`), /자재\/재고.*3번째 행 availableQuantity.*유한한 숫자/);
+    assert.throws(() => createCsvDecisionContextProvider(customerCsv, `${materialHeader}\nM-1,false,20\nM-2,true,${value}`), /자재\/재고.*2번째 행 availableQuantity.*유한한 숫자/);
   }
   for (const value of ["0", "-1", "2.5", "1e2"]) {
     const provider = createCsvDecisionContextProvider(customerCsv, `${materialHeader}\nM-1,false,${value}`);

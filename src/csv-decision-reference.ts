@@ -6,7 +6,7 @@ function referenceError(kind: ReferenceKind, location: string, message: string):
   return new Error(`${kind} 기준 CSV ${location}: ${message}`);
 }
 
-/** 행 번호는 헤더를 포함한 논리적 CSV 레코드 번호다. 인용 셀 내부 줄바꿈은 보존한다. */
+/** 데이터 행 번호는 헤더를 제외한 1부터 시작하는 논리적 CSV 레코드 번호다. 인용 셀 내부 줄바꿈은 보존한다. */
 function parseReferenceCsv(source: string, kind: ReferenceKind): string[][] {
   const text = source.replace(/^\uFEFF/, "");
   const rows: string[][] = [];
@@ -14,7 +14,7 @@ function parseReferenceCsv(source: string, kind: ReferenceKind): string[][] {
   let cell = "";
   let quoted = false;
   let afterQuote = false;
-  const syntaxError = (message: string) => referenceError(kind, `${rows.length + 1}번째 행 ${row.length + 1}번째 열`, message);
+  const syntaxError = (message: string) => referenceError(kind, `${rows.length === 0 ? "1번째 행 헤더" : `${rows.length}번째 행`} ${row.length + 1}번째 열`, message);
   const finishCell = () => {
     row.push(cell);
     cell = "";
@@ -82,7 +82,7 @@ function readReferenceRows(
 
   const identifiers = new Map<string, number>();
   return rows.map((row, index) => {
-    const rowNumber = index + 2;
+    const rowNumber = index + 1;
     if (row.length !== header.length) {
       throw referenceError(kind, `${rowNumber}번째 행`, `헤더는 ${header.length}개 필드인데 ${row.length}개 필드가 있습니다.`);
     }
@@ -112,15 +112,15 @@ export function createCsvDecisionContextProvider(customerCsv: string, materialCs
   const customers = readReferenceRows(customerCsv, "고객", ["customerId", "customerBlocked"], "customerId")
     .map((row, index) => ({
       customerId: row.customerId!,
-      customerBlocked: readBoolean(row.customerBlocked!, "고객", index + 2, "customerBlocked"),
+      customerBlocked: readBoolean(row.customerBlocked!, "고객", index + 1, "customerBlocked"),
     }));
   const materialRows = readReferenceRows(materialCsv, "자재/재고", ["materialId", "materialBlocked", "availableQuantity"], "materialId")
     .map((row, index) => {
-      const materialBlocked = readBoolean(row.materialBlocked!, "자재/재고", index + 2, "materialBlocked");
+      const materialBlocked = readBoolean(row.materialBlocked!, "자재/재고", index + 1, "materialBlocked");
       const value = row.availableQuantity!;
       const availableQuantity = Number(value);
       if (value.trim() === "" || !Number.isFinite(availableQuantity)) {
-        throw referenceError("자재/재고", `${index + 2}번째 행 availableQuantity`, "유한한 숫자여야 합니다.");
+        throw referenceError("자재/재고", `${index + 1}번째 행 availableQuantity`, "유한한 숫자여야 합니다.");
       }
       return { materialId: row.materialId!, materialBlocked, availableQuantity };
     });
