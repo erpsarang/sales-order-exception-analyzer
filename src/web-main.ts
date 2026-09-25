@@ -2,9 +2,13 @@ import "./web-styles.css";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import { createExceptionCsv, parseCsvUpload, validateOrders, type CsvUploadResult } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
+import { createCsvDecisionContextProvider } from "./csv-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
 
 const fileInput = document.querySelector<HTMLInputElement>("#csv-file")!;
+const customerInput = document.querySelector<HTMLInputElement>("#customer-file")!;
+const materialInput = document.querySelector<HTMLInputElement>("#material-file")!;
+const inputs = [fileInput, customerInput, materialInput] as const;
 const analyzeButton = document.querySelector<HTMLButtonElement>("#analyze-button")!;
 const downloadButton = document.querySelector<HTMLButtonElement>("#download-button")!;
 const errorMessage = document.querySelector<HTMLElement>("#error-message")!;
@@ -12,10 +16,13 @@ const resultSection = document.querySelector<HTMLElement>("#result-section")!;
 const exceptionTable = document.querySelector<HTMLTableElement>("#exception-table")!;
 const tableBody = exceptionTable.querySelector("tbody")!;
 const emptyMessage = document.querySelector<HTMLElement>("#empty-message")!;
-let exceptionCsv = "";
+type Selection = readonly [File | undefined, File | undefined, File | undefined];
+const selection = (): Selection => [fileInput.files?.[0], customerInput.files?.[0], materialInput.files?.[0]];
+const matches = (files: Selection): boolean => inputs.every((input, index) => input.files?.[0] === files[index]);
 let executionId = 0;
 let resultExecutionId: number | undefined;
-let resultFile: File | undefined;
+let resultFiles: Selection | undefined;
+let exceptionCsv = "";
 
 const analysisStatus = document.createElement("p");
 analysisStatus.id = "analysis-status";
@@ -23,9 +30,10 @@ analysisStatus.setAttribute?.("role", "status");
 analysisStatus.setAttribute?.("aria-live", "polite");
 resultSection.insertAdjacentElement?.("beforebegin", analysisStatus);
 function promptForAnalysis(): void {
-  analysisStatus.textContent = fileInput.files?.[0]
-    ? "선택한 CSV 파일을 분석하려면 분석하기 버튼을 누르세요."
-    : "분석할 CSV 파일을 선택하세요.";
+  const [order, customer, material] = selection();
+  analysisStatus.textContent = !order ? "분석할 주문 CSV 파일을 선택하세요."
+    : Boolean(customer) !== Boolean(material) ? "고객 기준 CSV와 자재/재고 기준 CSV를 모두 선택하세요."
+    : "선택한 CSV 파일을 분석하려면 분석하기 버튼을 누르세요.";
 }
 promptForAnalysis();
 
@@ -35,26 +43,24 @@ const uploadHelpHeading = document.createElement("h2");
 uploadHelpHeading.textContent = "CSV 양식과 입력 예시";
 uploadHelp.append(uploadHelpHeading);
 for (const text of [
-  "기본 주문 필수 열 4개: orderId (예: EXAMPLE-001), customerId (예: EXAMPLE-C001), materialId (예: EXAMPLE-M001), orderQuantity (주문수량, 예: 10).",
-  "업무 기준값 열 3개: availableQuantity (가용재고, 예: 20), customerBlocked (고객 차단 여부), materialBlocked (자재 차단 여부). 실제 업무 기준을 입력할 때는 이 3개 열을 모두 포함하세요. 기준값을 포함한 양식의 필수 열은 총 7개입니다.",
-  "기본 주문 열만 업로드하면 로컬 예제 기준을 사용합니다. 이는 운영 데이터가 아니므로 실제 출고 판단에는 업무 기준값 3개 열을 모두 입력하세요.",
-  "customerBlocked와 materialBlocked는 소문자 true가 차단, false가 미차단입니다. 주문수량과 가용재고는 숫자로 입력하세요.",
-  "선택 열: estimatedAmount (예상금액, 예: 150000), dueDate (납기일, 예: 2026-10-01), orderComment (주문 코멘트, 예: 예제 주문). 선택 열은 생략하거나 셀을 비워 둘 수 있습니다.",
+  "기본 주문 필수 열 4개: orderId, customerId, materialId, orderQuantity (숫자). 선택 열: estimatedAmount (숫자), dueDate, orderComment. 선택 열은 생략하거나 셀을 비워 둘 수 있습니다.",
+  "고객 기준 필수 열 2개: customerId, customerBlocked. 자재/재고 기준 필수 열 3개: materialId, materialBlocked, availableQuantity. 두 기준 CSV에는 선택 열이 없습니다.",
+  "customerBlocked와 materialBlocked는 소문자 true가 차단, false가 미차단입니다. availableQuantity는 유한한 숫자이며 식별자는 주문 값과 정확히 일치해야 합니다.",
+  "세 파일 분석: 기본 주문과 선택 열을 사용하며 두 기준 파일에서 기준값을 조회합니다. 주문의 직접 판정 열 availableQuantity, customerBlocked, materialBlocked는 제거하세요. 기준 하나만 선택하면 분석할 수 없습니다.",
+  "주문 단독 분석: 기본 주문 열만 있으면 운영 데이터가 아닌 로컬 예제 기준을 사용합니다. 직접 판정 열 3개를 모두 포함하면 주문에 입력한 기준값을 사용합니다 (필수 열 총 7개).",
 ]) {
   const paragraph = document.createElement("p");
   paragraph.textContent = text;
   uploadHelp.append(paragraph);
 }
 const templateNotice = document.createElement("p");
-templateNotice.textContent = "다운로드 파일은 정상 주문 1건과 차단·재고 부족 주문 1건을 담은 예제 데이터입니다. 실제 주문 분석 시 예제 주문 데이터와 가용재고·고객 및 자재 차단 여부를 실제 업무 기준값으로 교체하세요.";
+templateNotice.textContent = "다운로드 양식은 정상 주문 1건과 차단·재고 부족 주문 1건을 담은 예제 데이터입니다. 실제 업무에서는 주문과 기준값을 교체하세요. 세 파일 분석에는 양식의 직접 판정 열 3개를 제거하고 두 기준 CSV를 함께 선택하세요.";
 const templateDownloadButton = document.createElement("button");
 templateDownloadButton.type = "button";
 templateDownloadButton.textContent = "예제 CSV 양식 다운로드";
 uploadHelp.append(templateNotice, templateDownloadButton);
-// 파일 입력이 label 안에 있어도 다운로드 버튼은 독립적인 요소로 배치한다.
 const uploadAnchor = fileInput.closest?.("label") ?? fileInput;
 uploadAnchor.insertAdjacentElement?.("afterend", uploadHelp);
-
 templateDownloadButton.addEventListener("click", async () => {
   const { createOrderCsvTemplate } = await import("./order-csv-template.js");
   const url = URL.createObjectURL(new Blob([createOrderCsvTemplate()], { type: "text/csv;charset=utf-8" }));
@@ -66,7 +72,6 @@ templateDownloadButton.addEventListener("click", async () => {
     link.click();
   } finally {
     link.remove();
-    // 다운로드 시작 후 임시 URL을 해제한다.
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 });
@@ -79,7 +84,6 @@ for (const label of ["주문번호", "자재", "수량", "가용재고", "부족
   headerRow.append(header);
 }
 exceptionTable.querySelector("thead")!.replaceChildren(headerRow);
-
 const statistics = document.createElement("dl");
 statistics.className = "exception-statistics";
 function statistic(label: string): HTMLElement {
@@ -95,17 +99,18 @@ const exceptionRateValue = statistic("예외율");
 const reasonCountsValue = statistic("예외 사유별 건수");
 const topReasonValue = statistic("최다 사유");
 resultSection.prepend(statistics);
-
 const referenceSection = document.createElement("section");
 referenceSection.id = "reference-provenance";
 referenceSection.hidden = true;
 resultSection.prepend(referenceSection);
-
 function clearReference(): void {
   referenceSection.hidden = true;
   referenceSection.replaceChildren();
 }
-
+function clearError(): void {
+  errorMessage.textContent = "";
+  errorMessage.hidden = true;
+}
 function resetAnalysis(): void {
   clearReference();
   clearError();
@@ -113,41 +118,41 @@ function resetAnalysis(): void {
   downloadButton.hidden = true;
   exceptionCsv = "";
   resultExecutionId = undefined;
-  resultFile = undefined;
+  resultFiles = undefined;
   tableBody.replaceChildren();
   exceptionTable.hidden = true;
   emptyMessage.hidden = true;
-  for (const selector of ["#total-count", "#ready-count", "#exception-count"]) {
-    document.querySelector<HTMLElement>(selector)!.textContent = "";
-  }
+  for (const selector of ["#total-count", "#ready-count", "#exception-count"]) document.querySelector<HTMLElement>(selector)!.textContent = "";
   exceptionRateValue.textContent = "";
   reasonCountsValue.replaceChildren();
   topReasonValue.textContent = "";
 }
-
-fileInput.addEventListener("change", () => {
+for (const input of inputs) input.addEventListener("change", () => {
   executionId += 1;
   resetAnalysis();
   analyzeButton.disabled = false;
   promptForAnalysis();
 });
-
-function renderReference(upload: CsvUploadResult): void {
+function renderReference(upload: CsvUploadResult, uploaded: boolean): void {
   clearReference();
-  if (upload.referenceSource !== "provider" || upload.orders.length === 0) return;
-  // 이 화면의 provider는 localDecisionContextProvider로 고정되어 있다.
+  const local = upload.referenceSource === "provider" && !uploaded;
   const heading = document.createElement("h2");
-  heading.textContent = "예제 기준 분석";
+  heading.textContent = local ? "예제 기준 분석" : uploaded ? "업로드 기준 분석" : "주문에 직접 포함된 기준값 분석";
   const notice = document.createElement("p");
-  notice.textContent = "데이터 출처: 운영 데이터가 아닌 로컬 예제 기준입니다. 아래 가용재고와 고객·자재 차단 여부는 예제 값이며, 정상 판정도 실제 재고와 차단 상태를 확인한 결과가 아닙니다. 주문마다 같은 자재의 재고를 동일하게 적용하며 주문 간 재고를 차감하지 않습니다.";
+  notice.textContent = local
+    ? "데이터 출처: 운영 데이터가 아닌 로컬 예제 기준입니다. 가용재고와 고객·자재 차단 여부는 예제 값이며 정상 판정도 실제 재고와 차단 상태를 확인한 결과가 아닙니다."
+    : uploaded ? "데이터 출처: 사용자가 업로드한 고객 기준 CSV와 자재/재고 기준 CSV입니다."
+    : "데이터 출처: 주문 CSV에 직접 포함된 availableQuantity, customerBlocked, materialBlocked 값입니다.";
   const guidance = document.createElement("p");
-  guidance.textContent = "실제 출고 판단에는 availableQuantity, customerBlocked, materialBlocked 열에 업무 기준값을 포함한 CSV를 사용하세요.";
+  guidance.textContent = "주문 간 재고를 차감하지 않습니다. 실제 출고 전 기준값을 확인하세요.";
+  if (local) guidance.textContent += " 실제 업무 기준은 두 기준 CSV 또는 직접 판정 열 3개로 제공하세요.";
   const table = document.createElement("table");
   const caption = document.createElement("caption");
-  caption.textContent = "전체 주문에 적용한 예제 기준값 (입력 행 번호는 헤더를 제외한 데이터 행 순서)";
+  caption.textContent = `전체 주문에 적용한 ${local ? "예제 " : ""}기준값 (입력 행 번호는 헤더를 제외한 데이터 행 순서)`;
   const head = document.createElement("thead");
   const row = document.createElement("tr");
-  for (const label of ["입력 행 번호", "주문번호", "고객", "자재", "가용재고 (예제)", "고객 차단 여부 (예제)", "자재 차단 여부 (예제)"]) {
+  const suffix = local ? " (예제)" : "";
+  for (const label of ["입력 행 번호", "주문번호", "고객", "자재", `가용재고${suffix}`, `고객 차단 여부${suffix}`, `자재 차단 여부${suffix}`]) {
     const header = document.createElement("th");
     header.scope = "col";
     header.textContent = label;
@@ -164,7 +169,6 @@ function renderReference(upload: CsvUploadResult): void {
   referenceSection.append(heading, notice, guidance, table);
   referenceSection.hidden = false;
 }
-
 function renderSummary(display: OrderSummaryDisplay): void {
   exceptionRateValue.textContent = display.exceptionRateText;
   topReasonValue.textContent = display.topReasonText;
@@ -180,58 +184,68 @@ function renderSummary(display: OrderSummaryDisplay): void {
   }
   reasonCountsValue.replaceChildren(list);
 }
-
 function setText(selector: string, value: number): void {
   document.querySelector<HTMLElement>(selector)!.textContent = String(value);
 }
-
 function showError(message: string): void {
   errorMessage.textContent = message;
   errorMessage.hidden = false;
 }
-
-function clearError(): void {
-  errorMessage.textContent = "";
-  errorMessage.hidden = true;
-}
-
 function cell(value: string | number | undefined): HTMLTableCellElement {
   const element = document.createElement("td");
   element.textContent = value === undefined || value === "" ? "—" : String(value);
   return element;
 }
-
+async function readCsv(file: File, label: string): Promise<string> {
+  try { return await file.text(); }
+  catch (error) {
+    throw new Error(`${label} CSV 읽기 실패: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+const uploadedOrderGuidance = "세 파일 분석의 주문 CSV는 기본 필수 열 orderId, customerId, materialId, orderQuantity와 선택 열 estimatedAmount, dueDate, orderComment를 사용하세요. 직접 판정 열 availableQuantity, customerBlocked, materialBlocked는 제거하세요.";
 analyzeButton.addEventListener("click", async () => {
   const currentExecutionId = ++executionId;
   resetAnalysis();
-  const file = fileInput.files?.[0];
-  if (!file) {
-    analyzeButton.disabled = false;
+  const files = selection();
+  const [file, customer, material] = files;
+  const isCurrentExecution = (): boolean => currentExecutionId === executionId && matches(files);
+  analyzeButton.disabled = false;
+  if (!file || Boolean(customer) !== Boolean(material)) {
     promptForAnalysis();
-    showError("분석할 CSV 파일을 선택하세요.");
+    showError(!file ? "분석할 주문 CSV 파일을 선택하세요." : `누락된 ${customer ? "자재/재고" : "고객"} 기준 CSV를 선택하세요. 두 기준 파일이 모두 필요합니다.`);
     return;
   }
-  const isCurrentExecution = (): boolean =>
-    currentExecutionId === executionId && fileInput.files?.[0] === file;
+  const uploaded = Boolean(customer && material);
   analysisStatus.textContent = "선택한 CSV 파일을 분석하고 있습니다.";
   analyzeButton.disabled = true;
   try {
-    const text = await file.text();
+    const [text, customerText, materialText] = await Promise.all([
+      readCsv(file, "주문"),
+      customer ? readCsv(customer, "고객 기준") : Promise.resolve(""),
+      material ? readCsv(material, "자재/재고 기준") : Promise.resolve(""),
+    ]);
     if (!isCurrentExecution()) return;
-    const upload = parseCsvUpload(text, localDecisionContextProvider);
+    const provider = uploaded ? createCsvDecisionContextProvider(customerText, materialText) : localDecisionContextProvider;
+    let upload: CsvUploadResult;
+    try { upload = parseCsvUpload(text, provider); }
+    catch (error) {
+      if (!uploaded) throw error;
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${uploadedOrderGuidance}`);
+    }
+    if (uploaded && upload.referenceSource !== "provider") throw new Error(uploadedOrderGuidance);
     const { orders } = upload;
     validateOrders(orders);
     const batch = analyzeOrderBatch(orders);
+    const csv = createExceptionCsv(orders, batch, true);
+    const summary = formatOrderSummary(batch.summary);
+    if (!isCurrentExecution()) return;
     setText("#total-count", batch.summary.totalCount);
     setText("#ready-count", batch.summary.shipReadyCount);
     setText("#exception-count", batch.summary.exceptionCount);
-    renderSummary(formatOrderSummary(batch.summary));
-    tableBody.replaceChildren();
+    renderSummary(summary);
     for (const item of batch.exceptionWorklist) {
       const order = orders[item.resultIndex]!;
-      const shortage = item.reasonCodes.includes("INSUFFICIENT_STOCK")
-        ? order.orderQuantity - order.availableQuantity
-        : undefined;
+      const shortage = item.reasonCodes.includes("INSUFFICIENT_STOCK") ? order.orderQuantity - order.availableQuantity : undefined;
       const row = document.createElement("tr");
       const reasonCell = document.createElement("td");
       reasonCell.className = "exception-guides-cell";
@@ -261,13 +275,13 @@ analyzeButton.addEventListener("click", async () => {
     const hasExceptions = batch.exceptionWorklist.length > 0;
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
-    exceptionCsv = createExceptionCsv(orders, batch, true);
-    renderReference(upload);
+    renderReference(upload, uploaded);
+    exceptionCsv = csv;
     resultExecutionId = currentExecutionId;
-    resultFile = file;
+    resultFiles = files;
     downloadButton.hidden = !hasExceptions;
     resultSection.hidden = false;
-    analysisStatus.textContent = "選택한 CSV 파일의 분석이 완료되었습니다.";
+    analysisStatus.textContent = "선택한 CSV 파일의 분석이 완료되었습니다.";
   } catch (error) {
     if (!isCurrentExecution()) return;
     resetAnalysis();
@@ -277,9 +291,8 @@ analyzeButton.addEventListener("click", async () => {
     if (isCurrentExecution()) analyzeButton.disabled = false;
   }
 });
-
 downloadButton.addEventListener("click", () => {
-  if (resultExecutionId !== executionId || !resultFile || resultFile !== fileInput.files?.[0]
+  if (resultExecutionId !== executionId || !resultFiles || !matches(resultFiles)
     || resultSection.hidden || downloadButton.hidden || !exceptionCsv) return;
   const url = URL.createObjectURL(new Blob([exceptionCsv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
