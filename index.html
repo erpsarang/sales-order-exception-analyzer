@@ -10,14 +10,21 @@
       <header>
         <p class="eyebrow">Sales order exception analyzer</p>
         <h1>주문 예외 분석기</h1>
-        <p>CSV 파일을 선택해 출고 가능 주문과 확인이 필요한 예외 주문을 분류합니다.</p>
+        <p>주문과 기준 CSV를 선택해 출고 가능 주문과 예외 주문을 분류합니다.</p>
       </header>
       <section class="upload-panel" aria-labelledby="upload-title">
-        <h2 id="upload-title">주문 CSV 업로드</h2>
-        <label for="csv-file">CSV 파일</label>
-        <input id="csv-file" type="file" accept=".csv,text/csv" />
+        <h2 id="upload-title">분석 CSV 업로드</h2>
+        <label for="csv-file">주문 CSV</label>
+        <input id="csv-file" type="file" accept=".csv,text/csv" aria-describedby="order-help" />
+        <p id="order-help" class="hint">기본 필수 열: orderId, customerId, materialId, orderQuantity. 선택 열: estimatedAmount, dueDate, orderComment.</p>
+        <label for="customer-file">고객 기준 CSV</label>
+        <input id="customer-file" type="file" accept=".csv,text/csv" aria-describedby="customer-help" />
+        <p id="customer-help" class="hint">필수 열: customerId, customerBlocked. 선택 열 없음.</p>
+        <label for="material-file">자재/재고 기준 CSV</label>
+        <input id="material-file" type="file" accept=".csv,text/csv" aria-describedby="material-help" />
+        <p id="material-help" class="hint">필수 열: materialId, materialBlocked, availableQuantity. 선택 열 없음.</p>
+        <p class="hint">업로드 기준 분석에는 두 기준 파일이 모두 필요합니다. 이때 주문에는 직접 판정 열 availableQuantity, customerBlocked, materialBlocked를 넣지 마세요. 기준 파일 없이 기본 주문만 선택하면 로컬 예제 기준으로 분석합니다. 주문 단독으로 직접 판정 열 3개를 모두 포함하면 주문에 입력한 기준값을 사용합니다.</p>
         <button id="analyze-button" type="button">분석하기</button>
-        <p class="hint">필수 열: orderId, customerId, materialId, orderQuantity, availableQuantity, customerBlocked, materialBlocked</p>
       </section>
       <p id="error-message" class="error" role="alert" hidden></p>
       <section id="result-section" hidden aria-live="polite">
@@ -32,7 +39,7 @@
         </div>
         <div class="table-wrap">
           <table id="exception-table" hidden>
-            <thead><tr><th>주문번호</th><th>자재</th><th>수량</th><th>거래처</th><th>예상금액</th><th>납기일</th><th>주문 코멘트</th><th>예외 사유</th></tr></thead>
+            <thead><tr><th>주문번호</th><th>자재</th><th>수량</th><th>가용재고</th><th>부족 수량</th><th>거래처</th><th>예상금액</th><th>납기일</th><th>주문 코멘트</th><th>예외 사유</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
