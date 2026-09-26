@@ -77,6 +77,22 @@ export interface CsvUploadResult {
   referenceSource: "csv" | "provider";
 }
 
+export interface MissingCsvReference {
+  orderIndex: number;
+  orderId: string;
+  referenceKind: "customer" | "material" | "inventory";
+  identifier: string;
+}
+
+export type CsvUploadPreflightResult =
+  | { status: "ready"; upload: CsvUploadResult }
+  | { status: "missing-references"; missingReferences: MissingCsvReference[] };
+
+interface ParsedOrderRows {
+  orders: BusinessOrder[];
+  referenceSource: "csv" | "provider";
+}
+
 export function parseCsvOrders(source: string): OrderInput[] {
   return parseOrderRows(source).orders;
 }
@@ -90,7 +106,40 @@ export function parseCsvUpload(source: string, provider: DecisionContextProvider
   return parseOrderRows(source, provider);
 }
 
+/** ready는 기준 점검 통과를 뜻하며 출고 가능 판정은 아니다. 조회 오류는 그대로 전달한다. */
+export function preflightCsvUploadReferences(source: string, provider: DecisionContextProvider): CsvUploadPreflightResult {
+  const parsed = parseValidatedOrderRows(source, true);
+  const missingReferences: MissingCsvReference[] = [];
+  if (parsed.referenceSource === "provider") {
+    parsed.orders.forEach((order, orderIndex) => {
+      if (provider.getCustomerBlocked(order.customerId) === undefined) {
+        missingReferences.push({ orderIndex, orderId: order.orderId, referenceKind: "customer", identifier: order.customerId });
+      }
+      if (provider.getMaterialBlocked(order.materialId) === undefined) {
+        missingReferences.push({ orderIndex, orderId: order.orderId, referenceKind: "material", identifier: order.materialId });
+      }
+      if (provider.getAvailableQuantity(order.materialId) === undefined) {
+        missingReferences.push({ orderIndex, orderId: order.orderId, referenceKind: "inventory", identifier: order.materialId });
+      }
+    });
+  }
+  if (missingReferences.length > 0) return { status: "missing-references", missingReferences };
+  return { status: "ready", upload: completeOrderRows(parsed, provider) };
+}
+
 function parseOrderRows(source: string, provider?: DecisionContextProvider): CsvUploadResult {
+  return completeOrderRows(parseValidatedOrderRows(source, provider !== undefined), provider);
+}
+
+function completeOrderRows(parsed: ParsedOrderRows, provider?: DecisionContextProvider): CsvUploadResult {
+  // 모든 업무 필드 검증을 마친 뒤 조회하며, 실패 시 배열을 반환하지 않는다.
+  if (parsed.referenceSource === "provider" && provider !== undefined) {
+    return { orders: parsed.orders.map((order) => enrichOrder(order, provider)), referenceSource: "provider" };
+  }
+  return { orders: parsed.orders as OrderInput[], referenceSource: "csv" };
+}
+
+function parseValidatedOrderRows(source: string, allowBusinessFields: boolean): ParsedOrderRows {
   const rows = parseCsv(source);
   const header = rows.shift();
   if (!header) throw new Error("CSV 헤더가 필요합니다.");
@@ -101,7 +150,7 @@ function parseOrderRows(source: string, provider?: DecisionContextProvider): Csv
     if (fields.has(field)) throw new Error(`CSV 헤더 오류: ${field} 필드가 중복되었습니다.`);
     fields.add(field);
   }
-  const businessOnly = provider !== undefined && ["availableQuantity", ...requiredBooleanFields].every((field) => !fields.has(field));
+  const businessOnly = allowBusinessFields && ["availableQuantity", ...requiredBooleanFields].every((field) => !fields.has(field));
   const requiredFields = businessOnly
     ? [...requiredStringFields, "orderQuantity"]
     : [...requiredStringFields, ...requiredNumberFields, ...requiredBooleanFields];
@@ -136,11 +185,7 @@ function parseOrderRows(source: string, provider?: DecisionContextProvider): Csv
     }
     return order as unknown as BusinessOrder;
   });
-  // 모든 업무 필드 검증을 마친 뒤 조회하며, 실패 시 배열을 반환하지 않는다.
-  if (businessOnly && provider !== undefined) {
-    return { orders: orders.map((order) => enrichOrder(order, provider)), referenceSource: "provider" };
-  }
-  return { orders: orders as OrderInput[], referenceSource: "csv" };
+  return { orders, referenceSource: businessOnly ? "provider" : "csv" };
 }
 
 function escapeCsvCell(value: string | number | undefined): string {

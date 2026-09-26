@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
 import { createDecisionContextProvider, enrichOrder } from "../src/decision-context.js";
-import { parseCsvUpload } from "../src/order-csv.js";
+import { parseCsvUpload, preflightCsvUploadReferences } from "../src/order-csv.js";
 import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 
 const customerHeader = "customerId,customerBlocked";
@@ -124,6 +124,9 @@ test("BOM, 열 순서, LF·CRLF, 인용 셀과 이중 큰따옴표 및 내부 �
     orderId: "SO-quoted", customerId, materialId, orderQuantity: 1,
     availableQuantity: 2.5, customerBlocked: false, materialBlocked: true,
   }]);
+  assert.deepEqual(preflightCsvUploadReferences(
+    `${businessHeader}\nSO-quoted," C,""1""\r\nnext ","M,""1""\nnext",1`, provider,
+  ), { status: "ready", upload });
   assert.deepEqual(analyzeOrderBatch(upload.orders).results[0]!.reasonCodes, ["MATERIAL_BLOCKED"]);
 });
 
@@ -155,6 +158,14 @@ test("헤더만 있는 기준 CSV는 빈 조회기를 구성하고 기본값을 
   assert.equal(provider.getAvailableQuantity("M-1"), undefined);
   assert.deepEqual(parseCsvUpload(businessHeader, provider), { orders: [], referenceSource: "provider" });
   assert.throws(() => parseCsvUpload(`${businessHeader}\nSO-empty,C-1,M-1,1`, provider), /SO-empty.*고객.*C-1.*데이터가 없습니다/);
+  assert.deepEqual(preflightCsvUploadReferences(`${businessHeader}\nSO-empty,C-1,M-1,1`, provider), {
+    status: "missing-references",
+    missingReferences: [
+      { orderIndex: 0, orderId: "SO-empty", referenceKind: "customer", identifier: "C-1" },
+      { orderIndex: 0, orderId: "SO-empty", referenceKind: "material", identifier: "M-1" },
+      { orderIndex: 0, orderId: "SO-empty", referenceKind: "inventory", identifier: "M-1" },
+    ],
+  });
 });
 
 test("미등록 고객·자재 오류는 기존 enrichOrder와 같고 실패한 주문과 기준을 식별한다", () => {
@@ -190,6 +201,8 @@ test("실제 CSV 공급자로 보강한 주문과 전체 배치 결과는 판정
   const direct = `${businessHeader},availableQuantity,customerBlocked,materialBlocked${optional}\nSO-3,C-1,M-1,15,20,false,false,1200,2026-10-15,\nSO-1,C-2,M-2,0,-1,true,true,200,2026-10-16,"확인, 요청"\nSO-2,C-1,M-1,25,20,false,false,300,2026-10-14,긴급\nSO-3,C-1,M-1,15,20,false,false,,,\nSO-1,C-2,M-1,1,20,true,false,500,2026-10-14,고객 확인\n`;
   const actual = parseCsvUpload(business, provider);
   const expected = parseCsvUpload(direct, provider);
+  assert.deepEqual(preflightCsvUploadReferences(business, provider), { status: "ready", upload: actual });
+  assert.deepEqual(preflightCsvUploadReferences(direct, provider), { status: "ready", upload: expected });
   assert.equal(actual.referenceSource, "provider");
   assert.equal(expected.referenceSource, "csv");
   assert.deepEqual(actual.orders, expected.orders);
