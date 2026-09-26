@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { preflightCsvUploadReferences } from "../src/order-csv.js";
+import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
+import type { DecisionContextProvider } from "../src/decision-context.js";
 
 type UploadFile = { text(): Promise<string> };
 type Listener = () => unknown;
@@ -52,7 +55,7 @@ const executable = ts.transpileModule(source.replace(/^import .*;\r?\n/gm, ""), 
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 const inputIds = ["csv-file", "customer-file", "material-file"] as const;
-function setup() {
+function setup(useRealCsv = false) {
   const body = new Element("body");
   for (const id of [...inputIds, "analyze-button", "download-button", "error-message", "result-section", "exception-table", "empty-message", "total-count", "ready-count", "exception-count"]) {
     const element = new Element(id === "exception-table" ? "table" : "div");
@@ -66,19 +69,25 @@ function setup() {
   const references: string[][] = [];
   const downloads: Blob[] = [];
   type Order = { orderId: string; customerId: string; materialId: string; orderQuantity: number; availableQuantity: number; customerBlocked: boolean; materialBlocked: boolean };
+  const analyzed: Order[][] = [];
   runInNewContext(executable, {
     exports: {}, Error, Blob,
     document: { body, querySelector: (selector: string) => body.querySelector(selector), createElement: (tag: string) => new Element(tag) },
     URL: { createObjectURL: (blob: Blob) => { downloads.push(blob); return "blob:test"; }, revokeObjectURL: () => {} },
     localDecisionContextProvider: {},
-    createCsvDecisionContextProvider: (customer: string, material: string) => { references.push([customer, material]); return {}; },
-    parseCsvUpload: (text: string) => {
+    createCsvDecisionContextProvider: (customer: string, material: string) => {
+      references.push([customer, material]);
+      return useRealCsv ? createCsvDecisionContextProvider(customer, material) : {};
+    },
+    preflightCsvUploadReferences: (text: string, provider: DecisionContextProvider) => {
       parsed.push(text);
+      if (useRealCsv) return preflightCsvUploadReferences(text, provider);
       if (text === "invalid") throw new Error("잘못된 CSV");
-      return { referenceSource: text === "direct" ? "csv" : "provider", orders: [{ orderId: text, customerId: "C", materialId: "M", orderQuantity: 1, availableQuantity: 2, customerBlocked: text === "exception", materialBlocked: false }] };
+      return { status: "ready", upload: { referenceSource: text === "direct" ? "csv" : "provider", orders: [{ orderId: text, customerId: "C", materialId: "M", orderQuantity: 1, availableQuantity: 2, customerBlocked: text === "exception", materialBlocked: false }] } };
     },
     validateOrders: () => {},
     analyzeOrderBatch: (orders: Order[]) => {
+      analyzed.push(orders);
       const count = orders[0]!.customerBlocked ? 1 : 0;
       return { summary: { totalCount: 1, shipReadyCount: 1 - count, exceptionCount: count }, exceptionWorklist: count ? [{ resultIndex: 0, reasonCodes: ["CUSTOMER_BLOCKED"], exceptionGuides: [] }] : [] };
     },
@@ -86,7 +95,7 @@ function setup() {
     createExceptionCsv: (orders: Order[]) => `exception-csv:${orders[0]!.orderId}`,
   });
   return {
-    node, parsed, references, downloads,
+    node, parsed, references, downloads, analyzed,
     select(file?: UploadFile, id: string = "csv-file"): Promise<void> {
       node(id).files = file ? [file] : [];
       return node(id).emit("change");
@@ -109,8 +118,8 @@ async function selectThree(ui: ReturnType<typeof setup>): Promise<void> {
   await ui.select(file("materials"), "material-file");
 }
 function assertCleared(ui: ReturnType<typeof setup>): void {
-  for (const id of ["result-section", "download-button", "error-message", "reference-provenance"]) assert.equal(ui.node(id).hidden, true, id);
-  for (const id of ["reference-provenance", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
+  for (const id of ["result-section", "download-button", "error-message", "reference-provenance", "missing-references"]) assert.equal(ui.node(id).hidden, true, id);
+  for (const id of ["reference-provenance", "missing-references", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
   assert.equal(ui.node("analyze-button").disabled, false);
   assert.equal(ui.node("exception-table").querySelector("tbody")!.children.length, 0);
 }
@@ -251,4 +260,93 @@ test("재분석 시작은 결과를 지우고 같은 파일의 이전 실행도 
   assertCleared(ui);
   assert.equal(ui.node("analysis-status").attributes.get("role"), "status");
   assert.notEqual(ui.node("analysis-status").parent, ui.node("result-section"));
+});
+
+const missingOrders = "orderId,customerId,materialId,orderQuantity\nA,C-1,M-1,1\nB,C-2,M-1,1\n<주문>,C-1,<자재>,2";
+const customers = "customerId,customerBlocked\nC-1,false";
+const materials = "materialId,materialBlocked,availableQuantity\nM-1,false,20";
+async function selectMissingReferences(ui: ReturnType<typeof setup>): Promise<void> {
+  await ui.select(file(missingOrders));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file(materials), "material-file");
+}
+function missingRows(ui: ReturnType<typeof setup>): string[][] {
+  return ui.node("missing-references").querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent));
+}
+test("실제 preflight의 여러 주문 누락을 모두 표시하고 분석과 다운로드를 차단한다", async () => {
+  const ui = setup(true);
+  await selectMissingReferences(ui);
+  await ui.analyze();
+  const section = ui.node("missing-references");
+  assert.equal(section.hidden, false);
+  assert.notEqual(section.parent, ui.node("result-section"));
+  assert.deepEqual(section.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "기준 종류", "식별자"]);
+  assert.deepEqual(missingRows(ui), [
+    ["2", "B", "고객", "C-2"],
+    ["3", "<주문>", "자재", "<자재>"],
+    ["3", "<주문>", "재고", "<자재>"],
+  ]);
+  for (const row of section.querySelector("tbody")!.children) {
+    for (const cell of row.children) assert.equal(cell.children.length, 0);
+  }
+  for (const id of ["result-section", "download-button", "reference-provenance", "exception-table", "empty-message"]) assert.equal(ui.node(id).hidden, true, id);
+  assert.equal(ui.node("error-message").hidden, false);
+  assert.match(ui.node("error-message").textContent, /B.*고객.*C-2/);
+  assert.match(ui.node("error-message").textContent, /<주문>.*자재.*<자재>/);
+  assert.match(ui.node("error-message").textContent, /<주문>.*재고.*<자재>/);
+  for (const id of ["total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "");
+  assert.equal(ui.node("analyze-button").disabled, false);
+  assert.match(ui.node("analysis-status").textContent, /누락된 기준/);
+  assert.equal(ui.analyzed.length, 0);
+  await ui.download();
+  assert.equal(ui.downloads.length, 0);
+
+  await ui.select(file(`${customers}\nC-2,true`), "customer-file");
+  assertCleared(ui);
+  await ui.select(file(`${materials}\n<자재>,false,0`), "material-file");
+  await ui.analyze();
+  assert.equal(ui.node("missing-references").hidden, true);
+  assert.equal(ui.node("missing-references").textContent, "");
+  assert.equal(ui.node("result-section").hidden, false);
+  assert.match(ui.node("reference-provenance").textContent, /업로드 기준 분석/);
+  assert.equal(ui.analyzed.length, 1);
+  assert.deepEqual(ui.analyzed[0]!.map(order => [order.orderId, order.customerBlocked, order.availableQuantity]), [
+    ["A", false, 20], ["B", true, 20], ["<주문>", false, 0],
+  ]);
+});
+for (const id of inputIds) {
+  for (const clear of [false, true]) test(`${id} ${clear ? "해제" : "교체"}는 누락 목록도 즉시 지운다`, async () => {
+    const ui = setup(true);
+    await selectMissingReferences(ui);
+    await ui.analyze();
+    assert.equal(ui.node("missing-references").hidden, false);
+    const changed = ui.select(clear ? undefined : file("replacement"), id);
+    assertCleared(ui);
+    await changed;
+    await ui.download();
+    assert.equal(ui.downloads.length, 0);
+  });
+}
+test("누락 목록은 재분석 시작 즉시 지워지고 오래된 실행으로 복원되지 않는다", async () => {
+  const ui = setup(true);
+  await selectMissingReferences(ui);
+  const old = deferred();
+  const current = deferred();
+  let reads = 0;
+  await ui.select({ text: () => ++reads === 1 ? Promise.resolve(missingOrders) : reads === 2 ? old.file.text() : current.file.text() });
+  await ui.analyze();
+  assert.equal(missingRows(ui).length, 3);
+  const oldRun = ui.analyze();
+  assert.equal(ui.node("missing-references").hidden, true);
+  assert.equal(ui.node("missing-references").textContent, "");
+  const currentRun = ui.analyze();
+  current.resolve(missingOrders);
+  await currentRun;
+  assert.equal(missingRows(ui).length, 3);
+  const before = ui.snapshot();
+  old.resolve("orderId,customerId,materialId,orderQuantity\nOLD,UNKNOWN,UNKNOWN,1");
+  await oldRun;
+  assert.equal(ui.snapshot(), before);
+  assert.equal(ui.parsed.length, 2);
+  assert.equal(ui.analyzed.length, 0);
 });

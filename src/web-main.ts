@@ -1,6 +1,6 @@
 import "./web-styles.css";
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
-import { createExceptionCsv, parseCsvUpload, validateOrders, type CsvUploadResult } from "./order-csv.js";
+import { createExceptionCsv, preflightCsvUploadReferences, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { createCsvDecisionContextProvider } from "./csv-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
@@ -29,6 +29,39 @@ analysisStatus.id = "analysis-status";
 analysisStatus.setAttribute?.("role", "status");
 analysisStatus.setAttribute?.("aria-live", "polite");
 resultSection.insertAdjacentElement?.("beforebegin", analysisStatus);
+const missingReferenceSection = document.createElement("section");
+missingReferenceSection.id = "missing-references";
+missingReferenceSection.hidden = true;
+resultSection.insertAdjacentElement?.("beforebegin", missingReferenceSection);
+function renderMissingReferences(missingReferences: MissingCsvReference[]): void {
+  const heading = document.createElement("h2");
+  heading.textContent = "누락된 기준 데이터";
+  const guidance = document.createElement("p");
+  guidance.textContent = "누락된 기준이 있어 분석을 완료하지 않았습니다. 아래 식별자의 고객·자재·재고 기준을 CSV에 보완한 뒤 다시 분석하세요. 누락값은 추정하거나 자동 입력하지 않습니다.";
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = "주문별 누락 기준 (입력 행 번호는 헤더를 제외한 데이터 행 순서)";
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const label of ["입력 행 번호", "주문번호", "기준 종류", "식별자"]) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = label;
+    headerRow.append(header);
+  }
+  head.append(headerRow);
+  const body = document.createElement("tbody");
+  const labels = { customer: "고객", material: "자재", inventory: "재고" };
+  for (const missing of missingReferences) {
+    const row = document.createElement("tr");
+    row.append(cell(missing.orderIndex + 1), cell(missing.orderId), cell(labels[missing.referenceKind]), cell(missing.identifier));
+    body.append(row);
+  }
+  table.append(caption, head, body);
+  missingReferenceSection.replaceChildren(heading, guidance, table);
+  missingReferenceSection.hidden = false;
+  showError(missingReferences.map(missing => `주문 ${missing.orderId}: ${labels[missing.referenceKind]} 기준 ${missing.identifier} 누락`).join("\n"));
+}
 function promptForAnalysis(): void {
   const [order, customer, material] = selection();
   analysisStatus.textContent = !order ? "분석할 주문 CSV 파일을 선택하세요."
@@ -121,6 +154,8 @@ function clearError(): void {
 function resetAnalysis(): void {
   clearReference();
   clearError();
+  missingReferenceSection.hidden = true;
+  missingReferenceSection.replaceChildren();
   resultSection.hidden = true;
   downloadButton.hidden = true;
   exceptionCsv = "";
@@ -233,12 +268,18 @@ analyzeButton.addEventListener("click", async () => {
     ]);
     if (!isCurrentExecution()) return;
     const provider = uploaded ? createCsvDecisionContextProvider(customerText, materialText) : localDecisionContextProvider;
-    let upload: CsvUploadResult;
-    try { upload = parseCsvUpload(text, provider); }
+    let preflight: ReturnType<typeof preflightCsvUploadReferences>;
+    try { preflight = preflightCsvUploadReferences(text, provider); }
     catch (error) {
       if (!uploaded) throw error;
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${uploadedOrderGuidance}`);
     }
+    if (preflight.status === "missing-references") {
+      renderMissingReferences(preflight.missingReferences);
+      analysisStatus.textContent = "누락된 기준 데이터를 확인하세요. CSV를 보완한 뒤 다시 분석하세요.";
+      return;
+    }
+    const upload = preflight.upload;
     if (uploaded && upload.referenceSource !== "provider") throw new Error(uploadedOrderGuidance);
     const { orders } = upload;
     validateOrders(orders);
