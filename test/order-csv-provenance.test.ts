@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import { localDecisionContextProvider } from "../src/local-decision-reference.js";
-import { createExceptionCsv, parseCsvOrders, parseCsvOrdersForUpload, parseCsvUpload, validateOrders } from "../src/order-csv.js";
+import { createExceptionCsv, parseCsvOrders, parseCsvOrdersForUpload, parseCsvUpload, preflightCsvUploadReferences, validateOrders } from "../src/order-csv.js";
 
 const businessHeader = "orderId,customerId,materialId,orderQuantity";
 const referenceFields = ["availableQuantity", "customerBlocked", "materialBlocked"];
@@ -23,6 +23,7 @@ test("기준값을 생략한 정상 주문은 provider 출처와 실제 적용�
   const source = `${businessHeader}\nSO-1,C-1,M-1,10`;
   const upload = parseCsvUpload(source, provider);
   assert.deepEqual(upload, { orders: [normalOrder], referenceSource: "provider" });
+  assert.deepEqual(preflightCsvUploadReferences(source, provider), { status: "ready", upload });
   validateOrders(upload.orders);
   const batch = analyzeOrderBatch(upload.orders);
   assert.equal(batch.summary.shipReadyCount, 1);
@@ -37,6 +38,7 @@ test("예제와 동일한 값을 명시해도 출처는 csv이며 기존 공개 
   const source = `${fullHeader}\nSO-1,C-1,M-1,10,20,false,false`;
   const upload = parseCsvUpload(source, provider);
   assert.deepEqual(upload, { orders: [normalOrder], referenceSource: "csv" });
+  assert.deepEqual(preflightCsvUploadReferences(source, provider), { status: "ready", upload });
   for (const orders of [parseCsvOrders(source), parseCsvOrdersForUpload(source, provider)]) {
     assert.ok(Array.isArray(orders));
     assert.deepEqual(orders, upload.orders);
@@ -51,6 +53,7 @@ test("명시한 기준값은 로컬 등록 여부와 관계없이 그대로 적�
     orderId: "SO-X", customerId: "C-X", materialId: "M-X", orderQuantity: 10,
     availableQuantity: 3, customerBlocked: true, materialBlocked: false,
   }]);
+  assert.deepEqual(preflightCsvUploadReferences(source, provider), { status: "ready", upload });
   assert.deepEqual(analyzeOrderBatch(upload.orders).results[0]!.reasonCodes, ["CUSTOMER_BLOCKED", "INSUFFICIENT_STOCK"]);
 });
 
@@ -62,6 +65,7 @@ test("BOM, 헤더 순서, 인용 셀과 선택 필드를 보존한다", () => {
     ...normalOrder, orderComment: '확인, "요청"\n다음 줄', estimatedAmount: 0, dueDate: "2026-10-15",
   }]);
   assert.deepEqual(parseCsvOrdersForUpload(source, provider), upload.orders);
+  assert.deepEqual(preflightCsvUploadReferences(source, provider), { status: "ready", upload });
   const explicit = '\uFEFFmaterialBlocked,materialId,availableQuantity,orderId,customerBlocked,customerId,orderQuantity\r\nfalse,M-1,20,SO-1,false,C-1,10\r\n';
   assert.deepEqual(parseCsvUpload(explicit, provider), { orders: [normalOrder], referenceSource: "csv" });
 });
@@ -71,6 +75,9 @@ test("헤더만 있는 빈 입력도 파싱 분기에 따른 출처와 빈 배�
   assert.deepEqual(parseCsvUpload(fullHeader, provider), { orders: [], referenceSource: "csv" });
   assert.deepEqual(parseCsvOrdersForUpload(businessHeader, provider), []);
   assert.deepEqual(parseCsvOrders(fullHeader), []);
+  for (const header of [businessHeader, fullHeader]) {
+    assert.deepEqual(preflightCsvUploadReferences(header, provider), { status: "ready", upload: parseCsvUpload(header, provider) });
+  }
 });
 
 test("기준 열을 일부만 제공하는 모든 조합을 계속 거부한다", () => {
@@ -81,6 +88,7 @@ test("기준 열을 일부만 제공하는 모든 조합을 계속 거부한다"
     const source = `${businessHeader},${fields.join(",")}\nSO-1,C-1,M-1,10,${cells.join(",")}`;
     assert.throws(() => parseCsvUpload(source, provider), /필수 필드/);
     assert.throws(() => parseCsvOrdersForUpload(source, provider), /필수 필드/);
+    assert.throws(() => preflightCsvUploadReferences(source, provider), /필수 필드/);
   }
 });
 
@@ -104,6 +112,7 @@ test("기존 헤더, 셀, 숫자 및 불리언 검증 오류를 보존한다", (
   for (const [source, message] of cases) {
     assert.throws(() => parseCsvUpload(source, provider), message);
     assert.throws(() => parseCsvOrdersForUpload(source, provider), message);
+    assert.throws(() => preflightCsvUploadReferences(source, provider), message);
   }
 });
 
@@ -112,9 +121,11 @@ test("미등록 식별자의 보완 실패를 전달하고 모든 업무 행을 
     const source = `${businessHeader}\n${row}`;
     assert.throws(() => parseCsvUpload(source, provider));
     assert.throws(() => parseCsvOrdersForUpload(source, provider));
+    assert.equal(preflightCsvUploadReferences(source, provider).status, "missing-references");
   }
   const source = `${businessHeader}\nSO-1,C-X,M-X,10\nSO-2,C-1,M-1,NaN`;
   assert.throws(() => parseCsvUpload(source, provider), /CSV 데이터 2번째 행 orderQuantity: 유한한 숫자/);
+  assert.throws(() => preflightCsvUploadReferences(source, provider), /CSV 데이터 2번째 행 orderQuantity: 유한한 숫자/);
 });
 
 test("정상, 예외, 중복 주문의 적용값과 배치 판정 및 다운로드 결과를 보존한다", () => {
@@ -126,6 +137,7 @@ test("정상, 예외, 중복 주문의 적용값과 배치 판정 및 다운로�
   assert.equal(parseCsvUpload(explicit, provider).referenceSource, "csv");
   assert.deepEqual(upload.orders, expected);
   assert.deepEqual(parseCsvOrdersForUpload(business, provider), expected);
+  assert.deepEqual(preflightCsvUploadReferences(business, provider), { status: "ready", upload });
   validateOrders(upload.orders);
   const batch = analyzeOrderBatch(upload.orders);
   const expectedBatch = analyzeOrderBatch(expected);
