@@ -46,35 +46,42 @@ for (const text of [
   "기본 주문 필수 열 4개: orderId, customerId, materialId, orderQuantity (숫자). 선택 열: estimatedAmount (숫자), dueDate, orderComment. 선택 열은 생략하거나 셀을 비워 둘 수 있습니다.",
   "고객 기준 필수 열 2개: customerId, customerBlocked. 자재/재고 기준 필수 열 3개: materialId, materialBlocked, availableQuantity. 두 기준 CSV에는 선택 열이 없습니다.",
   "customerBlocked와 materialBlocked는 소문자 true가 차단, false가 미차단입니다. availableQuantity는 유한한 숫자이며 식별자는 주문 값과 정확히 일치해야 합니다.",
-  "세 파일 분석: 기본 주문과 선택 열을 사용하며 두 기준 파일에서 기준값을 조회합니다. 주문의 직접 판정 열 availableQuantity, customerBlocked, materialBlocked는 제거하세요. 기준 하나만 선택하면 분석할 수 없습니다.",
-  "주문 단독 분석: 기본 주문 열만 있으면 운영 데이터가 아닌 로컬 예제 기준을 사용합니다. 직접 판정 열 3개를 모두 포함하면 주문에 입력한 기준값을 사용합니다 (필수 열 총 7개).",
+  "세 파일 분석: 기준 CSV 업로드용 주문 양식과 두 기준 파일을 함께 선택하세요. 업로드용 양식은 기본 주문과 선택 열만 포함하므로 직접 판정 열을 제거할 필요가 없습니다. 기준 하나만 선택하면 분석할 수 없습니다.",
+  "주문 단독 분석: 주문 단독용 양식의 직접 판정 열 3개에 기준값을 입력하고 주문 CSV만 선택하세요 (필수 열 총 7개). 직접 판정 열 없이 기본 주문 열만 있으면 운영 데이터가 아닌 로컬 예제 기준을 사용합니다.",
 ]) {
   const paragraph = document.createElement("p");
   paragraph.textContent = text;
   uploadHelp.append(paragraph);
 }
 const templateNotice = document.createElement("p");
-templateNotice.textContent = "다운로드 양식은 정상 주문 1건과 차단·재고 부족 주문 1건을 담은 예제 데이터입니다. 실제 업무에서는 주문과 기준값을 교체하세요. 세 파일 분석에는 양식의 직접 판정 열 3개를 제거하고 두 기준 CSV를 함께 선택하세요.";
-const templateDownloadButton = document.createElement("button");
-templateDownloadButton.type = "button";
-templateDownloadButton.textContent = "예제 CSV 양식 다운로드";
-uploadHelp.append(templateNotice, templateDownloadButton);
+templateNotice.textContent = "두 양식은 예제 주문 2건을 담고 있습니다. 실제 업무에서는 주문 데이터를 교체하세요. 주문 단독용은 기준값도 교체해야 하며, 예제 값으로는 정상 1건과 차단·재고 부족 1건입니다. 기준 CSV 업로드용의 분석 결과는 함께 선택한 기준 파일의 값에 따라 달라집니다.";
+uploadHelp.append(templateNotice);
+for (const template of [
+  { label: "주문 단독용 CSV 양식 다운로드", filename: "example-order-template.csv", uploaded: false },
+  { label: "기준 CSV 업로드용 주문 양식 다운로드", filename: "example-order-upload-template.csv", uploaded: true },
+]) {
+  const templateDownloadButton = document.createElement("button");
+  templateDownloadButton.type = "button";
+  templateDownloadButton.textContent = template.label;
+  uploadHelp.append(templateDownloadButton);
+  templateDownloadButton.addEventListener("click", async () => {
+    const { createOrderCsvTemplate, createUploadedReferenceOrderCsvTemplate } = await import("./order-csv-template.js");
+    const csv = template.uploaded ? createUploadedReferenceOrderCsvTemplate() : createOrderCsvTemplate();
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = template.filename;
+    try {
+      document.body.append(link);
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  });
+}
 const uploadAnchor = fileInput.closest?.("label") ?? fileInput;
 uploadAnchor.insertAdjacentElement?.("afterend", uploadHelp);
-templateDownloadButton.addEventListener("click", async () => {
-  const { createOrderCsvTemplate } = await import("./order-csv-template.js");
-  const url = URL.createObjectURL(new Blob([createOrderCsvTemplate()], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "example-order-template.csv";
-  try {
-    document.body.append(link);
-    link.click();
-  } finally {
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
-});
 
 const headerRow = document.createElement("tr");
 for (const label of ["주문번호", "자재", "수량", "가용재고", "부족 수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"]) {
@@ -202,7 +209,7 @@ async function readCsv(file: File, label: string): Promise<string> {
     throw new Error(`${label} CSV 읽기 실패: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-const uploadedOrderGuidance = "세 파일 분석의 주문 CSV는 기본 필수 열 orderId, customerId, materialId, orderQuantity와 선택 열 estimatedAmount, dueDate, orderComment를 사용하세요. 직접 판정 열 availableQuantity, customerBlocked, materialBlocked는 제거하세요.";
+const uploadedOrderGuidance = "세 파일 분석에는 기준 CSV 업로드용 주문 양식을 다운로드해 사용하세요. 기본 필수 열은 orderId, customerId, materialId, orderQuantity이며 선택 열은 estimatedAmount, dueDate, orderComment입니다. 기존 주문 파일을 사용한다면 직접 판정 열 availableQuantity, customerBlocked, materialBlocked는 제거하세요.";
 analyzeButton.addEventListener("click", async () => {
   const currentExecutionId = ++executionId;
   resetAnalysis();
