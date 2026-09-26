@@ -33,10 +33,32 @@ export interface ExceptionWorklistItem {
   exceptionGuides: BatchOrderResult["exceptionGuides"];
 }
 
+export interface StockAllocationItem {
+  resultIndex: number;
+  orderId: string;
+  materialId: string;
+  dueDate: string;
+  allocatedQuantity: number;
+  shortageQuantity: number;
+}
+
+export type StockAllocationResult = {
+  materialId: string;
+  status: "CALCULATED";
+  availableQuantity: number;
+  items: StockAllocationItem[];
+} | {
+  materialId: string;
+  status: "UNABLE_TO_CALCULATE";
+  reasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY">;
+  items: [];
+};
+
 export interface BatchOrderAnalysisResult {
   results: BatchOrderResult[];
   exceptionPriorities: ExceptionPriority[];
   exceptionWorklist: ExceptionWorklistItem[];
+  stockAllocations: StockAllocationResult[];
   summary: {
     totalCount: number;
     shipReadyCount: number;
@@ -64,6 +86,59 @@ function validDueDate(value: unknown): string | null {
 
 function validEstimatedAmount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function validOrderQuantity(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function validAvailableQuantity(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAllocationResult[] {
+  const groups = new Map<string, Array<{ order: Readonly<OrderInput>; resultIndex: number }>>();
+  orders.forEach((order, resultIndex) => {
+    const group = groups.get(order.materialId);
+    if (group) group.push({ order, resultIndex });
+    else groups.set(order.materialId, [{ order, resultIndex }]);
+  });
+
+  const allocations: StockAllocationResult[] = [];
+  for (const [materialId, group] of groups) {
+    const reasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY"> = [];
+    if (group.some(({ order }) => validDueDate(order.dueDate) === null)) reasons.push("INVALID_DUE_DATE");
+    if (group.some(({ order }) => !validOrderQuantity(order.orderQuantity))) reasons.push("INVALID_QUANTITY");
+    if (group.some(({ order }) => !validAvailableQuantity(order.availableQuantity))) reasons.push("INVALID_AVAILABLE_QUANTITY");
+    if (group.some(({ order }) => order.availableQuantity !== group[0]!.order.availableQuantity)) reasons.push("CONFLICTING_AVAILABLE_QUANTITY");
+    if (reasons.length > 0) {
+      allocations.push({ materialId, status: "UNABLE_TO_CALCULATE", reasons, items: [] });
+      continue;
+    }
+
+    const availableQuantity = group[0]!.order.availableQuantity;
+    let remaining = availableQuantity;
+    const items = [...group]
+      .sort((left, right) => {
+        const leftDate = left.order.dueDate!;
+        const rightDate = right.order.dueDate!;
+        return leftDate < rightDate ? -1 : leftDate > rightDate ? 1 : left.resultIndex - right.resultIndex;
+      })
+      .map(({ order, resultIndex }): StockAllocationItem => {
+        const allocatedQuantity = Math.min(remaining, order.orderQuantity);
+        remaining -= allocatedQuantity;
+        return {
+          resultIndex,
+          orderId: order.orderId,
+          materialId,
+          dueDate: order.dueDate!,
+          allocatedQuantity,
+          shortageQuantity: order.orderQuantity - allocatedQuantity,
+        };
+      });
+    allocations.push({ materialId, status: "CALCULATED", availableQuantity, items });
+  }
+  return allocations;
 }
 
 /** 입력 순서대로 기존 주문 판정을 수행하며 입력을 변경하지 않는다. */
@@ -156,10 +231,11 @@ export function analyzeOrderBatch(
     };
   });
 
-  return {
+  const result: BatchOrderAnalysisResult = {
     results,
     exceptionPriorities,
     exceptionWorklist,
+    stockAllocations: allocateStock(orders),
     summary: {
       totalCount: results.length,
       shipReadyCount,
@@ -170,4 +246,7 @@ export function analyzeOrderBatch(
       topReasonCodes,
     },
   };
+  // 공급 배분은 접근 가능하게 제공하되 기존 배치 결과의 열거 키와 JSON 출력을 유지한다.
+  Object.defineProperty(result, "stockAllocations", { enumerable: false });
+  return result;
 }
