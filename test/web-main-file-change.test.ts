@@ -120,8 +120,8 @@ async function selectThree(ui: ReturnType<typeof setup>): Promise<void> {
   await ui.select(file("materials"), "material-file");
 }
 function assertCleared(ui: ReturnType<typeof setup>): void {
-  for (const id of ["result-section", "download-button", "error-message", "reference-provenance", "missing-references", "stock-allocations"]) assert.equal(ui.node(id).hidden, true, id);
-  for (const id of ["reference-provenance", "missing-references", "stock-allocations", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
+  for (const id of ["result-section", "download-button", "error-message", "reference-provenance", "missing-references", "supply-risk-summary", "stock-allocations"]) assert.equal(ui.node(id).hidden, true, id);
+  for (const id of ["reference-provenance", "missing-references", "supply-risk-summary", "stock-allocations", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
   assert.equal(ui.node("analyze-button").disabled, false);
   assert.equal(ui.node("exception-table").querySelector("tbody")!.children.length, 0);
 }
@@ -252,6 +252,8 @@ test("재분석 시작은 결과를 지우고 같은 파일의 이전 실행도 
   assert.equal(ui.node("stock-allocations").hidden, false);
   const oldRun = ui.analyze();
   assert.equal(ui.node("result-section").hidden, true);
+  assert.equal(ui.node("supply-risk-summary").hidden, true);
+  assert.equal(ui.node("supply-risk-summary").textContent, "");
   assert.equal(ui.node("stock-allocations").textContent, "");
   await ui.download();
   assert.equal(ui.downloads.length, 0);
@@ -369,9 +371,14 @@ test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하
   await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,100"), "material-file");
   await ui.analyze();
   const section = ui.node("stock-allocations");
+  const risk = ui.node("supply-risk-summary");
   assert.equal(section.hidden, false);
   assert.equal(ui.node("exception-count").textContent, "0");
+  assert.equal(ui.node("ready-count").textContent, "3");
   assert.equal(ui.node("empty-message").hidden, false);
+  assert.equal(risk.hidden, false);
+  assert.match(risk.textContent, /공급 위험: 1건/);
+  assert.match(risk.textContent, /첫 공급 위험 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
   assert.match(section.textContent, /주문별 예외 판정.*따로 비교/);
   assert.match(section.textContent, /첫 부족 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
   const table = section.querySelector("table")!;
@@ -383,4 +390,33 @@ test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하
   ]);
   await ui.select(file(orders.replace("SO-3", "NEW")));
   assertCleared(ui);
+});
+
+test("현재 재고로 모두 배분 가능하면 공급 위험 0건을 표시한다", async () => {
+  const ui = setup(true);
+  await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,30,2026-10-01\nSO-2,C-1,M-1,50,2026-10-02"));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,100"), "material-file");
+  await ui.analyze();
+  const risk = ui.node("supply-risk-summary");
+  assert.equal(risk.hidden, false);
+  assert.match(risk.textContent, /공급 위험: 0건/);
+  assert.doesNotMatch(risk.textContent, /첫 공급 위험 주문:/);
+  assert.equal(ui.node("exception-count").textContent, "0");
+  assert.match(ui.node("stock-allocations").textContent, /모든 주문에 배분 가능/);
+});
+
+test("배분 계산 불가 자재는 공급 위험 건수에서 제외하고 한계를 표시한다", async () => {
+  const ui = setup(true);
+  await ui.select(file("orderId,customerId,materialId,orderQuantity\nSO-1,C-1,M-1,30\nSO-2,C-1,M-1,50"));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,100"), "material-file");
+  await ui.analyze();
+  const risk = ui.node("supply-risk-summary");
+  assert.equal(risk.hidden, false);
+  assert.match(risk.textContent, /공급 위험: 0건/);
+  assert.match(risk.textContent, /배분 계산 불가 자재: 1건.*계산 가능한 자재의 주문만 포함/);
+  assert.match(risk.textContent, /계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다/);
+  assert.doesNotMatch(risk.textContent, /첫 공급 위험 주문:/);
+  assert.match(ui.node("stock-allocations").textContent, /배분 계산 불가.*납기일/);
 });
