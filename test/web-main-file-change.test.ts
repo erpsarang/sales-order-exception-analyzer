@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { preflightCsvUploadReferences } from "../src/order-csv.js";
 import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
+import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import type { DecisionContextProvider } from "../src/decision-context.js";
 
 type UploadFile = { text(): Promise<string> };
@@ -68,7 +69,7 @@ function setup(useRealCsv = false) {
   const parsed: string[] = [];
   const references: string[][] = [];
   const downloads: Blob[] = [];
-  type Order = { orderId: string; customerId: string; materialId: string; orderQuantity: number; availableQuantity: number; customerBlocked: boolean; materialBlocked: boolean };
+  type Order = { orderId: string; customerId: string; materialId: string; orderQuantity: number; availableQuantity: number; customerBlocked: boolean; materialBlocked: boolean; dueDate?: string };
   const analyzed: Order[][] = [];
   runInNewContext(executable, {
     exports: {}, Error, Blob,
@@ -83,13 +84,14 @@ function setup(useRealCsv = false) {
       parsed.push(text);
       if (useRealCsv) return preflightCsvUploadReferences(text, provider);
       if (text === "invalid") throw new Error("잘못된 CSV");
-      return { status: "ready", upload: { referenceSource: text === "direct" ? "csv" : "provider", orders: [{ orderId: text, customerId: "C", materialId: "M", orderQuantity: 1, availableQuantity: 2, customerBlocked: text === "exception", materialBlocked: false }] } };
+      return { status: "ready", upload: { referenceSource: text === "direct" ? "csv" : "provider", orders: [{ orderId: text, customerId: "C", materialId: "M", orderQuantity: 1, availableQuantity: 2, customerBlocked: text === "exception", materialBlocked: false, dueDate: "2026-10-01" }] } };
     },
     validateOrders: () => {},
     analyzeOrderBatch: (orders: Order[]) => {
       analyzed.push(orders);
+      if (useRealCsv) return analyzeOrderBatch(orders);
       const count = orders[0]!.customerBlocked ? 1 : 0;
-      return { summary: { totalCount: 1, shipReadyCount: 1 - count, exceptionCount: count }, exceptionWorklist: count ? [{ resultIndex: 0, reasonCodes: ["CUSTOMER_BLOCKED"], exceptionGuides: [] }] : [] };
+      return { summary: { totalCount: 1, shipReadyCount: 1 - count, exceptionCount: count }, exceptionWorklist: count ? [{ resultIndex: 0, reasonCodes: ["CUSTOMER_BLOCKED"], exceptionGuides: [] }] : [], stockAllocations: analyzeOrderBatch(orders).stockAllocations };
     },
     formatOrderSummary: () => ({ exceptionRateText: "통계", topReasonText: "사유", reasonCounts: [], reasonCountsText: "건수" }),
     createExceptionCsv: (orders: Order[]) => `exception-csv:${orders[0]!.orderId}`,
@@ -118,8 +120,8 @@ async function selectThree(ui: ReturnType<typeof setup>): Promise<void> {
   await ui.select(file("materials"), "material-file");
 }
 function assertCleared(ui: ReturnType<typeof setup>): void {
-  for (const id of ["result-section", "download-button", "error-message", "reference-provenance", "missing-references"]) assert.equal(ui.node(id).hidden, true, id);
-  for (const id of ["reference-provenance", "missing-references", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
+  for (const id of ["result-section", "download-button", "error-message", "reference-provenance", "missing-references", "stock-allocations"]) assert.equal(ui.node(id).hidden, true, id);
+  for (const id of ["reference-provenance", "missing-references", "stock-allocations", "error-message", "total-count", "ready-count", "exception-count"]) assert.equal(ui.node(id).textContent, "", id);
   assert.equal(ui.node("analyze-button").disabled, false);
   assert.equal(ui.node("exception-table").querySelector("tbody")!.children.length, 0);
 }
@@ -128,6 +130,7 @@ for (const id of inputIds) {
     const ui = setup();
     await selectThree(ui);
     await ui.analyze();
+    assert.equal(ui.node("stock-allocations").hidden, false);
     await ui.download();
     assert.equal(await ui.downloads[0]!.text(), "exception-csv:exception");
     const changed = ui.select(clear ? undefined : file("normal"), id);
@@ -139,6 +142,7 @@ for (const id of inputIds) {
     if (clear) {
       assert.equal(ui.node("error-message").hidden, false);
       assert.equal(ui.node("result-section").hidden, true);
+      assert.equal(ui.node("stock-allocations").textContent, "");
     } else {
       assert.equal(ui.node("result-section").hidden, false);
       assert.equal(ui.node("exception-count").textContent, id === "csv-file" ? "0" : "1");
@@ -204,6 +208,7 @@ for (const id of inputIds) {
     await ui.analyze();
     assert.match(ui.node("error-message").textContent, /CSV 읽기 실패: 접근 실패/);
     assert.equal(ui.node("result-section").hidden, true);
+    assert.equal(ui.node("stock-allocations").textContent, "");
     await ui.download();
     assert.equal(ui.downloads.length, 0);
   });
@@ -231,6 +236,7 @@ test("입력 조합 검증 및 출처 전환", async () => {
   await ui.analyze();
   assert.match(ui.node("error-message").textContent, /직접 판정 열/);
   assert.equal(ui.node("result-section").hidden, true);
+  assert.equal(ui.node("stock-allocations").textContent, "");
   await ui.select(file("exception"));
   await ui.analyze();
   assert.match(ui.node("reference-provenance").textContent, /업로드/);
@@ -243,8 +249,10 @@ test("재분석 시작은 결과를 지우고 같은 파일의 이전 실행도 
   let reads = 0;
   await ui.select({ text: () => ++reads === 1 ? Promise.resolve("exception") : reads === 2 ? old.file.text() : current.file.text() });
   await ui.analyze();
+  assert.equal(ui.node("stock-allocations").hidden, false);
   const oldRun = ui.analyze();
   assert.equal(ui.node("result-section").hidden, true);
+  assert.equal(ui.node("stock-allocations").textContent, "");
   await ui.download();
   assert.equal(ui.downloads.length, 0);
   const currentRun = ui.analyze();
@@ -254,6 +262,7 @@ test("재분석 시작은 결과를 지우고 같은 파일의 이전 실행도 
   current.reject(new Error("새 읽기 실패"));
   await currentRun;
   assert.match(ui.node("error-message").textContent, /새 읽기 실패/);
+  assert.equal(ui.node("stock-allocations").textContent, "");
   await ui.download();
   assert.equal(ui.downloads.length, 0);
   await ui.select(file("normal"));
@@ -289,7 +298,7 @@ test("실제 preflight의 여러 주문 누락을 모두 표시하고 분석과 
   for (const row of section.querySelector("tbody")!.children) {
     for (const cell of row.children) assert.equal(cell.children.length, 0);
   }
-  for (const id of ["result-section", "download-button", "reference-provenance", "exception-table", "empty-message"]) assert.equal(ui.node(id).hidden, true, id);
+  for (const id of ["result-section", "download-button", "reference-provenance", "stock-allocations", "exception-table", "empty-message"]) assert.equal(ui.node(id).hidden, true, id);
   assert.equal(ui.node("error-message").hidden, false);
   assert.match(ui.node("error-message").textContent, /B.*고객.*C-2/);
   assert.match(ui.node("error-message").textContent, /<주문>.*자재.*<자재>/);
@@ -313,6 +322,7 @@ test("실제 preflight의 여러 주문 누락을 모두 표시하고 분석과 
   assert.deepEqual(ui.analyzed[0]!.map(order => [order.orderId, order.customerBlocked, order.availableQuantity]), [
     ["A", false, 20], ["B", true, 20], ["<주문>", false, 0],
   ]);
+  assert.match(ui.node("stock-allocations").textContent, /배분 계산 불가.*납기일/);
 });
 for (const id of inputIds) {
   for (const clear of [false, true]) test(`${id} ${clear ? "해제" : "교체"}는 누락 목록도 즉시 지운다`, async () => {
@@ -349,4 +359,28 @@ test("누락 목록은 재분석 시작 즉시 지워지고 오래된 실행으�
   assert.equal(ui.snapshot(), before);
   assert.equal(ui.parsed.length, 2);
   assert.equal(ui.analyzed.length, 0);
+});
+
+test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하고 변경 시 지운다", async () => {
+  const ui = setup(true);
+  const orders = "orderId,customerId,materialId,orderQuantity,dueDate\nSO-3,C-1,M-1,40,2026-10-03\nSO-1,C-1,M-1,30,2026-10-01\nSO-2,C-1,M-1,50,2026-10-02";
+  await ui.select(file(orders));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,100"), "material-file");
+  await ui.analyze();
+  const section = ui.node("stock-allocations");
+  assert.equal(section.hidden, false);
+  assert.equal(ui.node("exception-count").textContent, "0");
+  assert.equal(ui.node("empty-message").hidden, false);
+  assert.match(section.textContent, /주문별 예외 판정.*따로 비교/);
+  assert.match(section.textContent, /첫 부족 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
+  const table = section.querySelector("table")!;
+  assert.deepEqual(table.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "납기일", "배분량", "부족량"]);
+  assert.deepEqual(table.querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent)), [
+    ["2", "SO-1", "2026-10-01", "30", "0"],
+    ["3", "SO-2", "2026-10-02", "50", "0"],
+    ["1", "SO-3", "2026-10-03", "20", "20"],
+  ]);
+  await ui.select(file(orders.replace("SO-3", "NEW")));
+  assertCleared(ui);
 });
