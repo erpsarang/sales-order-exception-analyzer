@@ -1,5 +1,5 @@
 import "./web-styles.css";
-import { analyzeOrderBatch } from "./batch-order-analysis.js";
+import { analyzeOrderBatch, type StockAllocationResult } from "./batch-order-analysis.js";
 import { createExceptionCsv, preflightCsvUploadReferences, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { createCsvDecisionContextProvider } from "./csv-decision-reference.js";
@@ -143,6 +143,70 @@ const referenceSection = document.createElement("section");
 referenceSection.id = "reference-provenance";
 referenceSection.hidden = true;
 resultSection.prepend(referenceSection);
+const allocationSection = document.createElement("section");
+allocationSection.id = "stock-allocations";
+allocationSection.hidden = true;
+resultSection.append(allocationSection);
+const allocationReasonLabels: Record<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY", string> = {
+  INVALID_DUE_DATE: "납기일 누락 또는 유효하지 않음",
+  INVALID_QUANTITY: "주문 수량이 유효하지 않음",
+  INVALID_AVAILABLE_QUANTITY: "가용재고가 유효하지 않음",
+  CONFLICTING_AVAILABLE_QUANTITY: "같은 자재의 가용재고 값이 서로 다름",
+};
+function renderAllocations(allocations: StockAllocationResult[]): void {
+  allocationSection.replaceChildren();
+  const heading = document.createElement("h2");
+  heading.textContent = "자재별 현재 재고 배분";
+  const explanation = document.createElement("p");
+  explanation.textContent = "기존 주문별 예외 판정은 각 주문을 가용재고와 따로 비교합니다. 아래 배분은 같은 자재의 현재 가용재고를 납기순으로 누적 차감합니다. 미래 입고나 계획은 포함하지 않으며, 차단된 주문도 수요에 포함합니다.";
+  allocationSection.append(heading, explanation);
+  if (allocations.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "배분할 주문이 없습니다.";
+    allocationSection.append(empty);
+  }
+  for (const allocation of allocations) {
+    const materialHeading = document.createElement("h3");
+    materialHeading.textContent = `자재 ${allocation.materialId}`;
+    allocationSection.append(materialHeading);
+    if (allocation.status === "UNABLE_TO_CALCULATE") {
+      const message = document.createElement("p");
+      message.textContent = `배분 계산 불가: ${allocation.reasons.map(reason => allocationReasonLabels[reason]).join(", ")}. 부족 시작 주문과 납기는 판단할 수 없습니다.`;
+      allocationSection.append(message);
+      continue;
+    }
+    const available = document.createElement("p");
+    available.textContent = `현재 가용재고: ${allocation.availableQuantity}`;
+    allocationSection.append(available);
+    const firstShortage = allocation.items.find(item => item.shortageQuantity > 0);
+    const onset = document.createElement("p");
+    onset.textContent = firstShortage
+      ? `첫 부족 주문: ${firstShortage.orderId} (입력 행 번호 ${firstShortage.resultIndex + 1}), 납기 ${firstShortage.dueDate}, 부족량 ${firstShortage.shortageQuantity}`
+      : "현재 가용재고로 모든 주문에 배분 가능합니다.";
+    allocationSection.append(onset);
+    const table = document.createElement("table");
+    const caption = document.createElement("caption");
+    caption.textContent = `자재 ${allocation.materialId} 납기순 재고 배분`;
+    const head = document.createElement("thead");
+    const row = document.createElement("tr");
+    for (const label of ["입력 행 번호", "주문번호", "납기일", "배분량", "부족량"]) {
+      const header = document.createElement("th");
+      header.scope = "col";
+      header.textContent = label;
+      row.append(header);
+    }
+    head.append(row);
+    const body = document.createElement("tbody");
+    for (const item of allocation.items) {
+      const itemRow = document.createElement("tr");
+      itemRow.append(cell(item.resultIndex + 1), cell(item.orderId), cell(item.dueDate), cell(item.allocatedQuantity), cell(item.shortageQuantity));
+      body.append(itemRow);
+    }
+    table.append(caption, head, body);
+    allocationSection.append(table);
+  }
+  allocationSection.hidden = false;
+}
 function clearReference(): void {
   referenceSection.hidden = true;
   referenceSection.replaceChildren();
@@ -154,6 +218,8 @@ function clearError(): void {
 function resetAnalysis(): void {
   clearReference();
   clearError();
+  allocationSection.hidden = true;
+  allocationSection.replaceChildren();
   missingReferenceSection.hidden = true;
   missingReferenceSection.replaceChildren();
   resultSection.hidden = true;
@@ -186,7 +252,7 @@ function renderReference(upload: CsvUploadResult, uploaded: boolean): void {
     : uploaded ? "데이터 출처: 사용자가 업로드한 고객 기준 CSV와 자재/재고 기준 CSV입니다."
     : "데이터 출처: 주문 CSV에 직접 포함된 availableQuantity, customerBlocked, materialBlocked 값입니다.";
   const guidance = document.createElement("p");
-  guidance.textContent = "주문 간 재고를 차감하지 않습니다. 실제 출고 전 기준값을 확인하세요.";
+  guidance.textContent = "주문별 예외 판정은 주문 간 재고를 차감하지 않습니다. 자재별 현재 재고 배분은 아래에서 확인하세요. 실제 출고 전 기준값을 확인하세요.";
   if (local) guidance.textContent += " 실제 업무 기준은 두 기준 CSV 또는 직접 판정 열 3개로 제공하세요.";
   const table = document.createElement("table");
   const caption = document.createElement("caption");
@@ -324,6 +390,7 @@ analyzeButton.addEventListener("click", async () => {
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
     renderReference(upload, uploaded);
+    renderAllocations(batch.stockAllocations);
     exceptionCsv = csv;
     resultExecutionId = currentExecutionId;
     resultFiles = files;
