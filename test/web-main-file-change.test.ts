@@ -252,6 +252,8 @@ test("재분석 시작은 결과를 지우고 같은 파일의 이전 실행도 
   assert.equal(ui.node("stock-allocations").hidden, false);
   const oldRun = ui.analyze();
   assert.equal(ui.node("result-section").hidden, true);
+  assert.equal(ui.node("supply-risk-summary").hidden, true);
+  assert.equal(ui.node("supply-risk-summary").textContent, "");
   assert.equal(ui.node("stock-allocations").textContent, "");
   await ui.download();
   assert.equal(ui.downloads.length, 0);
@@ -414,6 +416,7 @@ test("배분 계산 불가 자재는 공급 위험 건수에서 제외하고 한
   assert.equal(risk.hidden, false);
   assert.match(risk.textContent, /공급 위험: 0건/);
   assert.match(risk.textContent, /배분 계산 불가 자재: 1건.*계산 가능한 자재의 주문만 포함/);
+  assert.match(risk.textContent, /계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다/);
   assert.doesNotMatch(risk.textContent, /첫 공급 위험 주문:/);
   assert.match(ui.node("stock-allocations").textContent, /배분 계산 불가.*납기일/);
 });

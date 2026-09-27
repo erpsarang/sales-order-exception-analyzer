@@ -152,9 +152,8 @@ supplyRiskSection.id = "supply-risk-summary";
 supplyRiskSection.hidden = true;
 allocationSection.insertAdjacentElement?.("beforebegin", supplyRiskSection);
 function renderSupplyRisk(allocations: StockAllocationResult[]): void {
-  const shortages = allocations
-    .filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED")
-    .flatMap(allocation => allocation.items.filter(item => item.shortageQuantity > 0));
+  const calculated = allocations.filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED");
+  const shortages = calculated.flatMap(allocation => allocation.items.filter(item => item.shortageQuantity > 0));
   shortages.sort((left, right) => left.dueDate < right.dueDate ? -1 : left.dueDate > right.dueDate ? 1 : left.resultIndex - right.resultIndex);
   const unableCount = allocations.filter(allocation => allocation.status === "UNABLE_TO_CALCULATE").length;
   const heading = document.createElement("h2");
@@ -174,6 +173,11 @@ function renderSupplyRisk(allocations: StockAllocationResult[]): void {
     const unable = document.createElement("p");
     unable.textContent = `배분 계산 불가 자재: ${unableCount}건. 공급 위험 건수는 계산 가능한 자재의 주문만 포함합니다.`;
     supplyRiskSection.append(unable);
+    if (calculated.length === 0) {
+      const unknown = document.createElement("p");
+      unknown.textContent = "계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다.";
+      supplyRiskSection.append(unknown);
+    }
   }
   supplyRiskSection.hidden = false;
 }
