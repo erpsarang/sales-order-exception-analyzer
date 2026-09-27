@@ -147,6 +147,36 @@ const allocationSection = document.createElement("section");
 allocationSection.id = "stock-allocations";
 allocationSection.hidden = true;
 resultSection.append(allocationSection);
+const supplyRiskSection = document.createElement("section");
+supplyRiskSection.id = "supply-risk-summary";
+supplyRiskSection.hidden = true;
+allocationSection.insertAdjacentElement?.("beforebegin", supplyRiskSection);
+function renderSupplyRisk(allocations: StockAllocationResult[]): void {
+  const shortages = allocations
+    .filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED")
+    .flatMap(allocation => allocation.items.filter(item => item.shortageQuantity > 0));
+  shortages.sort((left, right) => left.dueDate < right.dueDate ? -1 : left.dueDate > right.dueDate ? 1 : left.resultIndex - right.resultIndex);
+  const unableCount = allocations.filter(allocation => allocation.status === "UNABLE_TO_CALCULATE").length;
+  const heading = document.createElement("h2");
+  heading.textContent = "공급 위험 (누적 재고 배분)";
+  const count = document.createElement("p");
+  count.textContent = `공급 위험: ${shortages.length}건`;
+  const distinction = document.createElement("p");
+  distinction.textContent = "주문별 정상·예외 판정과 별개로, 같은 자재의 현재 재고를 납기순으로 누적 배분한 결과입니다.";
+  supplyRiskSection.replaceChildren(heading, count, distinction);
+  const first = shortages[0];
+  if (first) {
+    const onset = document.createElement("p");
+    onset.textContent = `첫 공급 위험 주문: ${first.orderId} (입력 행 번호 ${first.resultIndex + 1}), 납기 ${first.dueDate}, 부족량 ${first.shortageQuantity}`;
+    supplyRiskSection.append(onset);
+  }
+  if (unableCount > 0) {
+    const unable = document.createElement("p");
+    unable.textContent = `배분 계산 불가 자재: ${unableCount}건. 공급 위험 건수는 계산 가능한 자재의 주문만 포함합니다.`;
+    supplyRiskSection.append(unable);
+  }
+  supplyRiskSection.hidden = false;
+}
 const allocationReasonLabels: Record<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY", string> = {
   INVALID_DUE_DATE: "납기일 누락 또는 유효하지 않음",
   INVALID_QUANTITY: "주문 수량이 유효하지 않음",
@@ -218,6 +248,8 @@ function clearError(): void {
 function resetAnalysis(): void {
   clearReference();
   clearError();
+  supplyRiskSection.hidden = true;
+  supplyRiskSection.replaceChildren();
   allocationSection.hidden = true;
   allocationSection.replaceChildren();
   missingReferenceSection.hidden = true;
@@ -390,6 +422,7 @@ analyzeButton.addEventListener("click", async () => {
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
     renderReference(upload, uploaded);
+    renderSupplyRisk(batch.stockAllocations);
     renderAllocations(batch.stockAllocations);
     exceptionCsv = csv;
     resultExecutionId = currentExecutionId;
