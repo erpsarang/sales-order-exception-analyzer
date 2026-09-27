@@ -21,22 +21,145 @@ interface ExplicitPathContextBudget {
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
+type StructuredPlanContextRole =
+  | "changeTargets"
+  | "requiredEvidence"
+  | "validationEvidence"
+  | "historicalReferences"
+  | "outOfScope";
+
+interface StructuredPlanContextHints {
+  readonly changeTargets: readonly string[];
+  readonly requiredEvidence: readonly string[];
+  readonly validationEvidence: readonly string[];
+  readonly historicalReferences: readonly string[];
+  readonly outOfScope: readonly string[];
+}
+
+const STRUCTURED_PLAN_CONTEXT_ROLES = new Set<StructuredPlanContextRole>([
+  "changeTargets",
+  "requiredEvidence",
+  "validationEvidence",
+  "historicalReferences",
+  "outOfScope",
+]);
+
+function safeRequirementPath(path: string): boolean {
+  return !isAbsolute(path)
+    && !path.includes("\\")
+    && !path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
+}
+
+function pushUnique(target: string[], path: string): void {
+  if (!target.includes(path)) target.push(path);
+}
+
+/**
+ * AI/Human Issue가 제공한 bounded Context-selection metadata를 읽는다.
+ *
+ * 지원 형식은 fenced yaml/yml 안의 `planContext:` 아래 다섯 역할뿐이다.
+ * 이 값은 Context 우선순위 힌트일 뿐이며 IMPLEMENT authority를 만들지 않는다.
+ * 알 수 없는 key와 잘못된 항목은 이전 역할에 편입하지 않는다.
+ */
+function structuredPlanContextHints(requirement: string): StructuredPlanContextHints {
+  const raw: Record<StructuredPlanContextRole, string[]> = {
+    changeTargets: [],
+    requiredEvidence: [],
+    validationEvidence: [],
+    historicalReferences: [],
+    outOfScope: [],
+  };
+
+  for (const fence of requirement.matchAll(/```(?:yaml|yml)\s*\n([\s\S]*?)```/gi)) {
+    const lines = fence[1]!.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const planMatch = /^(\s*)planContext:\s*$/.exec(lines[index]!);
+      if (!planMatch) continue;
+      const planIndent = planMatch[1]!.length;
+      let role: StructuredPlanContextRole | null = null;
+      let roleIndent = -1;
+
+      for (index += 1; index < lines.length; index += 1) {
+        const line = lines[index]!;
+        if (!line.trim() || line.trimStart().startsWith("#")) continue;
+        const indent = line.length - line.trimStart().length;
+        if (indent <= planIndent) {
+          index -= 1;
+          break;
+        }
+
+        // A sibling key, including an unknown one, ends the preceding role.
+        // A nested key also ends the role so its list cannot be misclassified.
+        const keyMatch = /^\s*([A-Za-z][A-Za-z0-9]*):(?:\s*(?:#.*)?)?$/.exec(line);
+        if (keyMatch) {
+          const candidate = keyMatch[1]!;
+          if (roleIndent < 0 || indent <= roleIndent) roleIndent = indent;
+          role = indent === roleIndent && STRUCTURED_PLAN_CONTEXT_ROLES.has(candidate as StructuredPlanContextRole)
+            ? candidate as StructuredPlanContextRole
+            : null;
+          continue;
+        }
+
+        if (!role || indent <= roleIndent) {
+          role = null;
+          continue;
+        }
+        const itemMatch = /^\s*-\s+([A-Za-z0-9._/-]{3,500})\s*$/.exec(line);
+        if (!itemMatch) {
+          role = null;
+          continue;
+        }
+        const path = itemMatch[1]!;
+        if (safeRequirementPath(path)) pushUnique(raw[role], path);
+      }
+    }
+  }
+
+  // 같은 path가 여러 역할에 있으면 변경·근거·검증 순서의 높은 역할을 사용한다.
+  const claimed = new Set<string>();
+  const keepHighest = (paths: readonly string[]): string[] => {
+    const kept: string[] = [];
+    for (const path of paths) {
+      if (claimed.has(path)) continue;
+      claimed.add(path);
+      kept.push(path);
+    }
+    return kept;
+  };
+
+  const changeTargets = keepHighest(raw.changeTargets);
+  const requiredEvidence = keepHighest(raw.requiredEvidence);
+  const validationEvidence = keepHighest(raw.validationEvidence);
+  const historicalReferences = keepHighest(raw.historicalReferences);
+  const outOfScope = keepHighest(raw.outOfScope);
+  return { changeTargets, requiredEvidence, validationEvidence, historicalReferences, outOfScope };
+}
+
 // `/` 없는 토큰(`package.json` 등)도 후보로 둔다. 실재하는 일반 파일인지는 explicitContextFile이 확인하므로
 // 존재하지 않는 이름이나 디렉터리는 지금처럼 건너뛴다 (#273 재PLAN run 36114594331).
 function requirementPathAnchors(requirement: string): string[] {
   const anchors: string[] = [];
   for (const match of requirement.matchAll(/`([A-Za-z0-9._/-]{3,500})`/g)) {
     const path = match[1]!;
-    if (
-      isAbsolute(path) ||
-      path.includes("\\") ||
-      path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
-    ) {
-      continue;
-    }
+    if (!safeRequirementPath(path)) continue;
     if (!anchors.includes(path)) anchors.push(path);
   }
   return anchors;
+}
+
+function prioritizedRequirementPaths(requirement: string): string[] {
+  const hints = structuredPlanContextHints(requirement);
+  const priority = [
+    ...hints.changeTargets,
+    ...hints.requiredEvidence,
+    ...hints.validationEvidence,
+  ];
+  const deferred = new Set([...hints.historicalReferences, ...hints.outOfScope]);
+  for (const path of requirementPathAnchors(requirement)) {
+    if (deferred.has(path) || priority.includes(path)) continue;
+    priority.push(path);
+  }
+  return priority;
 }
 
 function requirementTerms(requirement: string): string[] {
@@ -105,13 +228,7 @@ function excerpt(
   return { content: trimUtf8(text.slice(startOffset), maxBytes), startOffset };
 }
 
-function explicitContextFile(
-  target: string,
-  path: string,
-  terms: readonly string[],
-  symbols: readonly string[],
-  maxBytes: number,
-): PlanContextFile | null {
+function explicitText(target: string, path: string): string | null {
   const absolute = join(target, path);
   if (!existsSync(absolute)) return null;
   const stat = lstatSync(absolute);
@@ -124,9 +241,18 @@ function explicitContextFile(
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(`Explicit PLAN context path escapes target: ${path}`);
   }
+  return decodeText(realFile);
+}
 
-  const text = decodeText(realFile);
-  if (text === null) return null;
+function explicitContextFile(
+  target: string,
+  path: string,
+  terms: readonly string[],
+  symbols: readonly string[],
+  maxBytes: number,
+  text: string | null = explicitText(target, path),
+): PlanContextFile | null {
+  if (text === null || maxBytes < 1) return null;
   const part = excerpt(text, terms, symbols, maxBytes);
   const byteLength = Buffer.byteLength(part.content, "utf8");
   if (byteLength < 1) return null;
@@ -139,6 +265,20 @@ function explicitContextFile(
     contentDigest: createHash("sha256").update(part.content, "utf8").digest("hex"),
     content: part.content,
   };
+}
+
+// 명시 경로가 등장 순서대로 파일당 최대 20KB를 먼저 가져가면 뒤 핵심 파일이 0B가 된다 (#310/#312).
+// 작은 파일은 전체를 받고, 남은 byte는 아직 배정받지 않은 파일에 균등하게 나눈다(결정적 water-filling).
+function fairByteAllocation(needs: readonly number[], budget: number): number[] {
+  const allocation = needs.map(() => 0);
+  const order = needs.map((_, index) => index).sort((a, b) => needs[a]! - needs[b]! || a - b);
+  let remaining = budget;
+  for (const [position, index] of order.entries()) {
+    const share = Math.floor(remaining / (order.length - position));
+    allocation[index] = Math.min(needs[index]!, share);
+    remaining -= allocation[index]!;
+  }
+  return allocation;
 }
 
 function payload(repository: string, sha: string, files: readonly PlanContextFile[]): PlanContextPackPayload {
@@ -181,12 +321,21 @@ export function augmentPlanContextWithExplicitPaths(
 
   const terms = requirementTerms(requirement);
   const symbols = requirementSymbolAnchors(requirement);
+  const readable: { path: string; text: string }[] = [];
+  for (const path of prioritizedRequirementPaths(requirement)) {
+    if (readable.length >= maxFiles) break;
+    const text = explicitText(target, path);
+    if (text === null || text.length === 0) continue;
+    readable.push({ path, text });
+  }
+  const allocation = fairByteAllocation(
+    readable.map(({ text }) => Math.min(Buffer.byteLength(text, "utf8"), maxFileBytes)),
+    maxBytes,
+  );
   const explicit: PlanContextFile[] = [];
   let explicitBytes = 0;
-  for (const path of requirementPathAnchors(requirement)) {
-    if (explicit.length >= maxFiles || explicitBytes >= maxBytes) break;
-    const remaining = maxBytes - explicitBytes;
-    const file = explicitContextFile(target, path, terms, symbols, Math.min(maxFileBytes, remaining));
+  for (const [index, { path, text }] of readable.entries()) {
+    const file = explicitContextFile(target, path, terms, symbols, allocation[index]!, text);
     if (!file) continue;
     explicit.push(file);
     explicitBytes += file.byteLength;
