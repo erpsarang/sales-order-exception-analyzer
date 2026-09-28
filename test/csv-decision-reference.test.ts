@@ -220,6 +220,17 @@ test("실제 CSV 공급자로 보강한 주문과 전체 배치 결과는 판정
   assert.deepEqual(batch.exceptionWorklist.map(({ resultIndex }) => resultIndex), [4, 2, 1]);
   assert.equal(batch.summary.shipReadyCount, 2);
   assert.equal(batch.summary.exceptionCount, 3);
+  const allocationOrders = parseCsvUpload(
+    `${businessHeader},dueDate\nSO-early,C-1,M-1,12,2026-10-01\nSO-late,C-1,M-1,12,2026-10-02`,
+    provider,
+  ).orders;
+  assert.deepEqual(analyzeOrderBatch(allocationOrders).stockAllocations, [{
+    materialId: "M-1", status: "CALCULATED", availableQuantity: 20,
+    items: [
+      { resultIndex: 0, orderId: "SO-early", materialId: "M-1", dueDate: "2026-10-01", allocatableQuantity: 20, allocatedQuantity: 12, remainingQuantity: 8, shortageQuantity: 0 },
+      { resultIndex: 1, orderId: "SO-late", materialId: "M-1", dueDate: "2026-10-02", allocatableQuantity: 8, allocatedQuantity: 8, remainingQuantity: 0, shortageQuantity: 4 },
+    ],
+  }]);
   // 같은 자재의 반복 주문에도 같은 스냅샷을 쓰고 호출 사이에 재고를 차감하지 않는다.
   assert.equal(provider.getAvailableQuantity("M-1"), 20);
   assert.deepEqual(parseCsvUpload(business, provider), actual);

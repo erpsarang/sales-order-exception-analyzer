@@ -24,9 +24,9 @@ test("납기순으로 현재 재고를 배분하고 부족이 시작되는 주�
   assert.deepEqual(batch.stockAllocations, [{
     materialId: "M-1", status: "CALCULATED", availableQuantity: 100,
     items: [
-      { resultIndex: 1, orderId: "SO-1", materialId: "M-1", dueDate: "2026-10-01", allocatedQuantity: 30, shortageQuantity: 0 },
-      { resultIndex: 2, orderId: "SO-2", materialId: "M-1", dueDate: "2026-10-02", allocatedQuantity: 50, shortageQuantity: 0 },
-      { resultIndex: 0, orderId: "SO-3", materialId: "M-1", dueDate: "2026-10-03", allocatedQuantity: 20, shortageQuantity: 20 },
+      { resultIndex: 1, orderId: "SO-1", materialId: "M-1", dueDate: "2026-10-01", allocatableQuantity: 100, allocatedQuantity: 30, remainingQuantity: 70, shortageQuantity: 0 },
+      { resultIndex: 2, orderId: "SO-2", materialId: "M-1", dueDate: "2026-10-02", allocatableQuantity: 70, allocatedQuantity: 50, remainingQuantity: 20, shortageQuantity: 0 },
+      { resultIndex: 0, orderId: "SO-3", materialId: "M-1", dueDate: "2026-10-03", allocatableQuantity: 20, allocatedQuantity: 20, remainingQuantity: 0, shortageQuantity: 20 },
     ],
   }]);
   assert.deepEqual(batch.results, orders.map((order) => ({
@@ -46,9 +46,9 @@ test("같은 납기는 입력 위치로 정렬하고 차단된 주문도 수요�
   const batch = analyzeOrderBatch(orders);
   const allocation = batch.stockAllocations[0]!;
   assert.equal(allocation.status, "CALCULATED");
-  assert.deepEqual(allocation.items.map(({ resultIndex, allocatedQuantity, shortageQuantity }) => ({ resultIndex, allocatedQuantity, shortageQuantity })), [
-    { resultIndex: 0, allocatedQuantity: 60, shortageQuantity: 0 },
-    { resultIndex: 1, allocatedQuantity: 40, shortageQuantity: 20 },
+  assert.deepEqual(allocation.items.map(({ resultIndex, allocatableQuantity, allocatedQuantity, remainingQuantity, shortageQuantity }) => ({ resultIndex, allocatableQuantity, allocatedQuantity, remainingQuantity, shortageQuantity })), [
+    { resultIndex: 0, allocatableQuantity: 100, allocatedQuantity: 60, remainingQuantity: 40, shortageQuantity: 0 },
+    { resultIndex: 1, allocatableQuantity: 40, allocatedQuantity: 40, remainingQuantity: 0, shortageQuantity: 20 },
   ]);
   assert.deepEqual(batch.results[0]!.reasonCodes, ["CUSTOMER_BLOCKED"]);
   assert.deepEqual(batch.results[1]!.reasonCodes, []);
@@ -79,7 +79,7 @@ test("한 자재의 계산 불가는 다른 자재의 배분에 영향을 주지
   assert.equal(first.stockAllocations[0]!.status, "UNABLE_TO_CALCULATE");
   assert.deepEqual(first.stockAllocations[1], {
     materialId: "M-2", status: "CALCULATED", availableQuantity: 5,
-    items: [{ resultIndex: 1, orderId: "SO-1", materialId: "M-2", dueDate: "2026-10-01", allocatedQuantity: 5, shortageQuantity: 0 }],
+    items: [{ resultIndex: 1, orderId: "SO-1", materialId: "M-2", dueDate: "2026-10-01", allocatableQuantity: 5, allocatedQuantity: 5, remainingQuantity: 0, shortageQuantity: 0 }],
   });
   assert.notStrictEqual(first.stockAllocations, second.stockAllocations);
   assert.deepEqual(first, second);
