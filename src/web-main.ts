@@ -223,7 +223,7 @@ function renderAllocations(allocations: StockAllocationResult[]): void {
     caption.textContent = `자재 ${allocation.materialId} 납기순 재고 배분`;
     const head = document.createElement("thead");
     const row = document.createElement("tr");
-    for (const label of ["입력 행 번호", "주문번호", "납기일", "배분량", "부족량"]) {
+    for (const label of ["입력 행 번호", "주문번호", "납기일", "배분 가능 수량", "배분량", "처리 후 잔량", "부족량"]) {
       const header = document.createElement("th");
       header.scope = "col";
       header.textContent = label;
@@ -233,7 +233,7 @@ function renderAllocations(allocations: StockAllocationResult[]): void {
     const body = document.createElement("tbody");
     for (const item of allocation.items) {
       const itemRow = document.createElement("tr");
-      itemRow.append(cell(item.resultIndex + 1), cell(item.orderId), cell(item.dueDate), cell(item.allocatedQuantity), cell(item.shortageQuantity));
+      itemRow.append(cell(item.resultIndex + 1), cell(item.orderId), cell(item.dueDate), cell(item.allocatableQuantity), cell(item.allocatedQuantity), cell(item.remainingQuantity), cell(item.shortageQuantity));
       body.append(itemRow);
     }
     table.append(caption, head, body);

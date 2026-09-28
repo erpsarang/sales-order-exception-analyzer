@@ -38,7 +38,9 @@ export interface StockAllocationItem {
   orderId: string;
   materialId: string;
   dueDate: string;
+  allocatableQuantity: number;
   allocatedQuantity: number;
+  remainingQuantity: number;
   shortageQuantity: number;
 }
 
@@ -125,6 +127,7 @@ function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAlloca
         return leftDate < rightDate ? -1 : leftDate > rightDate ? 1 : left.resultIndex - right.resultIndex;
       })
       .map(({ order, resultIndex }): StockAllocationItem => {
+        const allocatableQuantity = remaining;
         const allocatedQuantity = Math.min(remaining, order.orderQuantity);
         remaining -= allocatedQuantity;
         return {
@@ -132,7 +135,9 @@ function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAlloca
           orderId: order.orderId,
           materialId,
           dueDate: order.dueDate!,
+          allocatableQuantity,
           allocatedQuantity,
+          remainingQuantity: remaining,
           shortageQuantity: order.orderQuantity - allocatedQuantity,
         };
       });

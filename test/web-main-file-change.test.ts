@@ -382,11 +382,11 @@ test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하
   assert.match(section.textContent, /주문별 예외 판정.*따로 비교/);
   assert.match(section.textContent, /첫 부족 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
   const table = section.querySelector("table")!;
-  assert.deepEqual(table.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "납기일", "배분량", "부족량"]);
+  assert.deepEqual(table.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "납기일", "배분 가능 수량", "배분량", "처리 후 잔량", "부족량"]);
   assert.deepEqual(table.querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent)), [
-    ["2", "SO-1", "2026-10-01", "30", "0"],
-    ["3", "SO-2", "2026-10-02", "50", "0"],
-    ["1", "SO-3", "2026-10-03", "20", "20"],
+    ["2", "SO-1", "2026-10-01", "100", "30", "70", "0"],
+    ["3", "SO-2", "2026-10-02", "70", "50", "20", "0"],
+    ["1", "SO-3", "2026-10-03", "20", "20", "0", "20"],
   ]);
   await ui.select(file(orders.replace("SO-3", "NEW")));
   assertCleared(ui);
