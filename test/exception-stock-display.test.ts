@@ -67,12 +67,20 @@ class ElementDouble {
   scope = "";
   hidden = false;
   disabled = false;
+  download = "";
+  parent: ElementDouble | undefined;
   files: { text(): Promise<string> }[] = [];
   listeners = new Map<string, () => void | Promise<void>>();
   constructor(readonly tagName: string) {}
-  append(...nodes: ElementDouble[]): void { this.children.push(...nodes); }
-  prepend(...nodes: ElementDouble[]): void { this.children.unshift(...nodes); }
-  replaceChildren(...nodes: ElementDouble[]): void { this.ownText = ""; this.children = [...nodes]; }
+  append(...nodes: ElementDouble[]): void { for (const node of nodes) node.parent = this; this.children.push(...nodes); }
+  prepend(...nodes: ElementDouble[]): void { for (const node of nodes) node.parent = this; this.children.unshift(...nodes); }
+  replaceChildren(...nodes: ElementDouble[]): void { this.ownText = ""; this.children = []; this.append(...nodes); }
+  insertAdjacentElement(position: string, element: ElementDouble): void {
+    if (!this.parent) return;
+    const index = this.parent.children.indexOf(this);
+    element.parent = this.parent;
+    this.parent.children.splice(index + (position === "afterend" ? 1 : 0), 0, element);
+  }
   querySelector(selector: string): ElementDouble | null {
     for (const child of this.children) {
       if (child.tagName === selector || `#${child.id}` === selector) return child;
@@ -102,6 +110,7 @@ function setup() {
   const body = new ElementDouble("tbody");
   get("exception-table").append(head, body);
   const downloads: Blob[] = [];
+  const filenames: string[] = [];
   const modules: Record<string, unknown> = {
     "./web-styles.css": {},
     "./batch-order-analysis.js": { analyzeOrderBatch },
@@ -113,11 +122,15 @@ function setup() {
   runInNewContext(compiled, {
     exports: {}, Error, Blob,
     require: (name: string) => { assert.ok(Object.hasOwn(modules, name), `Unexpected import: ${name}`); return modules[name]; },
-    document: { body: root, querySelector: (selector: string) => root.querySelector(selector), createElement: (tag: string) => new ElementDouble(tag) },
+    document: { body: root, querySelector: (selector: string) => root.querySelector(selector), createElement: (tag: string) => {
+      const element = new ElementDouble(tag);
+      if (tag === "a") element.addEventListener("click", () => { filenames.push(element.download); });
+      return element;
+    } },
     URL: { createObjectURL: (blob: Blob) => { downloads.push(blob); return "blob:test"; }, revokeObjectURL: () => {} },
   });
   return {
-    get, head, body, downloads,
+    get, head, body, downloads, filenames,
     select: async (id: string, text?: string) => { get(id).files = text === undefined ? [] : [{ text: async () => text }]; await get(id).listeners.get("change")!(); },
     analyze: async () => { await get("analyze-button").listeners.get("click")!(); },
     download: async () => { await get("download-button").listeners.get("click")!(); },
@@ -151,6 +164,61 @@ test("web renders accessible headers and row-specific stock values in CSV column
   assert.equal(ui.get("empty-message").hidden, false);
   await ui.download();
   assert.equal(ui.downloads.length, 1);
+});
+const supplyRiskInput = [
+  "orderId,customerId,materialId,orderQuantity,availableQuantity,customerBlocked,materialBlocked,dueDate",
+  "SO-1,C-1,M-1,6,10,false,false,2026-10-01",
+  "SO-2,C-1,M-1,6,10,false,false,2026-10-02",
+].join("\n");
+test("주문별 예외가 없어도 누적 부족 주문을 공급 위험 CSV로 내려받는다", async () => {
+  const ui = setup();
+  await ui.select("csv-file", supplyRiskInput);
+  await ui.analyze();
+  const riskButton = ui.get("supply-risk-download-button");
+  assert.equal(ui.get("exception-count").textContent, "0");
+  assert.equal(ui.get("download-button").hidden, true);
+  assert.equal(riskButton.hidden, false);
+  assert.equal(riskButton.textContent, "공급 위험 CSV 다운로드");
+  assert.match(ui.get("supply-risk-summary").textContent, /공급 위험: 1건/);
+  riskButton.click();
+  assert.deepEqual(ui.filenames, ["supply-risk-orders.csv"]);
+  assert.equal(await readDownload(ui.downloads[0]!), "\uFEFF주문번호,자재,부족 수량\nSO-2,M-1,2\n");
+  await ui.download();
+  assert.equal(ui.downloads.length, 1);
+});
+test("공급 위험이 0건이면 버튼을 숨기고 기존 예외 CSV는 그대로 내려받는다", async () => {
+  const ui = setup();
+  await ui.select("csv-file", supplyRiskInput.replace("SO-2,C-1,M-1,6", "SO-2,C-1,M-1,4"));
+  await ui.analyze();
+  const riskButton = ui.get("supply-risk-download-button");
+  assert.equal(riskButton.hidden, true);
+  riskButton.click();
+  assert.equal(ui.downloads.length, 0);
+  await ui.select("csv-file", input);
+  await ui.analyze();
+  assert.equal(ui.get("download-button").hidden, false);
+  await ui.download();
+  const orders = orderCsv.parseCsvOrders(input);
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(ui.filenames, ["exception-orders.csv"]);
+  assert.equal(await readDownload(ui.downloads[0]!), orderCsv.createExceptionCsv(orders, batch, true));
+});
+test("선택 파일 변경과 분석 실패 후에는 이전 공급 위험 CSV를 내려받을 수 없다", async () => {
+  const ui = setup();
+  await ui.select("csv-file", supplyRiskInput);
+  await ui.analyze();
+  const riskButton = ui.get("supply-risk-download-button");
+  ui.get("csv-file").files = [{ text: async () => supplyRiskInput }];
+  riskButton.click();
+  assert.equal(ui.downloads.length, 0);
+  await ui.select("csv-file", "invalid");
+  assert.equal(riskButton.hidden, true);
+  riskButton.click();
+  assert.equal(ui.downloads.length, 0);
+  await ui.analyze();
+  assert.equal(ui.get("result-section").hidden, true);
+  riskButton.click();
+  assert.equal(ui.downloads.length, 0);
 });
 const businessHeader = "orderId,customerId,materialId,orderQuantity";
 const customers = "customerId,customerBlocked\nC-1,false\nC-2,true";

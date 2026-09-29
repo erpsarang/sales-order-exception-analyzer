@@ -1,6 +1,6 @@
 import "./web-styles.css";
 import { analyzeOrderBatch, type StockAllocationResult } from "./batch-order-analysis.js";
-import { createExceptionCsv, preflightCsvUploadReferences, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
+import { createExceptionCsv, createSupplyRiskCsv, preflightCsvUploadReferences, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { createCsvDecisionContextProvider } from "./csv-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
@@ -23,6 +23,7 @@ let executionId = 0;
 let resultExecutionId: number | undefined;
 let resultFiles: Selection | undefined;
 let exceptionCsv = "";
+let supplyRiskBatch: ReturnType<typeof analyzeOrderBatch> | undefined;
 
 const analysisStatus = document.createElement("p");
 analysisStatus.id = "analysis-status";
@@ -151,6 +152,11 @@ const supplyRiskSection = document.createElement("section");
 supplyRiskSection.id = "supply-risk-summary";
 supplyRiskSection.hidden = true;
 allocationSection.insertAdjacentElement?.("beforebegin", supplyRiskSection);
+const supplyRiskDownloadButton = document.createElement("button");
+supplyRiskDownloadButton.id = "supply-risk-download-button";
+supplyRiskDownloadButton.type = "button";
+supplyRiskDownloadButton.textContent = "공급 위험 CSV 다운로드";
+supplyRiskDownloadButton.hidden = true;
 function renderSupplyRisk(allocations: StockAllocationResult[]): void {
   const calculated = allocations.filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED");
   const shortages = calculated.flatMap(allocation => allocation.items.filter(item => item.shortageQuantity > 0));
@@ -162,6 +168,7 @@ function renderSupplyRisk(allocations: StockAllocationResult[]): void {
   count.textContent = `공급 위험: ${shortages.length}건`;
   const distinction = document.createElement("p");
   distinction.textContent = "주문별 정상·예외 판정과 별개로, 같은 자재의 현재 재고를 납기순으로 누적 배분한 결과입니다.";
+  supplyRiskDownloadButton.hidden = shortages.length === 0;
   supplyRiskSection.replaceChildren(heading, count, distinction);
   const first = shortages[0];
   if (first) {
@@ -179,6 +186,7 @@ function renderSupplyRisk(allocations: StockAllocationResult[]): void {
       supplyRiskSection.append(unknown);
     }
   }
+  supplyRiskSection.append(supplyRiskDownloadButton);
   supplyRiskSection.hidden = false;
 }
 const allocationReasonLabels: Record<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY", string> = {
@@ -252,6 +260,8 @@ function clearError(): void {
 function resetAnalysis(): void {
   clearReference();
   clearError();
+  supplyRiskDownloadButton.hidden = true;
+  supplyRiskBatch = undefined;
   supplyRiskSection.hidden = true;
   supplyRiskSection.replaceChildren();
   allocationSection.hidden = true;
@@ -429,6 +439,7 @@ analyzeButton.addEventListener("click", async () => {
     renderSupplyRisk(batch.stockAllocations);
     renderAllocations(batch.stockAllocations);
     exceptionCsv = csv;
+    supplyRiskBatch = batch;
     resultExecutionId = currentExecutionId;
     resultFiles = files;
     downloadButton.hidden = !hasExceptions;
@@ -450,6 +461,17 @@ downloadButton.addEventListener("click", () => {
   const link = document.createElement("a");
   link.href = url;
   link.download = "exception-orders.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+});
+supplyRiskDownloadButton.addEventListener("click", () => {
+  if (resultExecutionId !== executionId || !resultFiles || !matches(resultFiles)
+    || resultSection.hidden || supplyRiskSection.hidden || supplyRiskDownloadButton.hidden || !supplyRiskBatch) return;
+  const csv = createSupplyRiskCsv(supplyRiskBatch);
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "supply-risk-orders.csv";
   link.click();
   URL.revokeObjectURL(url);
 });
