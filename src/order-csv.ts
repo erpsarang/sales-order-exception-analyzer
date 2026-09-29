@@ -205,3 +205,15 @@ export function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeo
   });
   return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
 }
+
+export function createSupplyRiskCsv(batch: ReturnType<typeof analyzeOrderBatch>): string {
+  const header = ["주문번호", "자재", "부족 수량"];
+  const rows = batch.stockAllocations.flatMap((allocation) =>
+    allocation.status === "CALCULATED"
+      ? allocation.items
+        .filter((item) => item.shortageQuantity > 0)
+        .map((item) => [item.orderId, item.materialId, item.shortageQuantity].map(escapeCsvCell).join(","))
+      : [],
+  );
+  return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
+}
