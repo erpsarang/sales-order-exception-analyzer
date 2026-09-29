@@ -205,3 +205,15 @@ export function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeo
   });
   return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
 }
+
+/** 계산 가능한 누적 배분에서 부족량이 양수인 주문만 내보낸다. */
+export function createSupplyRiskCsv(orders: OrderInput[], batch: ReturnType<typeof analyzeOrderBatch>): string {
+  const header = ["입력 행 번호", "주문번호", "자재", "수량", "가용재고", "납기일", "배분량", "부족량"];
+  const rows = batch.stockAllocations.flatMap((allocation) => allocation.status === "CALCULATED"
+    ? allocation.items.filter((item) => item.shortageQuantity > 0).map((item) => {
+      const order = orders[item.resultIndex]!;
+      return [item.resultIndex + 1, item.orderId, allocation.materialId, order.orderQuantity, allocation.availableQuantity, item.dueDate, item.allocatedQuantity, item.shortageQuantity].map(escapeCsvCell).join(",");
+    })
+    : []);
+  return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
+}
