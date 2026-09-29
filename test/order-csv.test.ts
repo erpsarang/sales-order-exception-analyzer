@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createExceptionCsv, parseCsvOrders, parseCsvOrdersForUpload, preflightCsvUploadReferences, validateOrders } from "../src/order-csv.js";
+import { createExceptionCsv, createSupplyRiskCsv, parseCsvOrders, parseCsvOrdersForUpload, preflightCsvUploadReferences, validateOrders } from "../src/order-csv.js";
 import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import { formatOrderSummary } from "../src/order-summary.js";
 import type { DecisionContextProvider } from "../src/decision-context.js";
@@ -130,4 +130,36 @@ test("뒤쪽 주문의 조회 실패도 전체 업로드를 거부한다", () =>
       { orderIndex: 2, orderId: "SO-3", referenceKind: "inventory", identifier: "M-missing" },
     ],
   });
+});
+
+test("정상 판정 주문의 누적 배분 부족을 공급 위험 CSV에 포함한다", () => {
+  const orders = [
+    { orderId: "SO-1", customerId: "C-1", materialId: "M-1", orderQuantity: 6, availableQuantity: 10, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-01" },
+    { orderId: "SO-2", customerId: "C-1", materialId: "M-1", orderQuantity: 6, availableQuantity: 10, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-02" },
+  ];
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.results.map((result) => result.status), ["SHIP_READY", "SHIP_READY"]);
+  assert.equal(createExceptionCsv(orders, batch), "\uFEFF주문번호,자재,수량,거래처,예상금액,납기일,주문 코멘트,예외 사유\n");
+  assert.equal(createSupplyRiskCsv(batch), "\uFEFF주문번호,자재,부족 수량\nSO-2,M-1,2\n");
+});
+
+test("공급 위험 CSV는 계산 불가 자재와 부족량 0을 제외하고 셀을 이스케이프한다", () => {
+  const orders = [
+    { orderId: "SO-1", customerId: "C-1", materialId: "M,1", orderQuantity: 6, availableQuantity: 10, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-01" },
+    { orderId: 'SO-"2"', customerId: "C-1", materialId: "M,1", orderQuantity: 6, availableQuantity: 10, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-02" },
+    { orderId: "SO-3", customerId: "C-1", materialId: "M-2", orderQuantity: 5, availableQuantity: 0, customerBlocked: false, materialBlocked: false },
+    { orderId: "SO-4", customerId: "C-1", materialId: "M-3", orderQuantity: 5, availableQuantity: 5, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-03" },
+  ];
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.stockAllocations.map((allocation) => allocation.status), ["CALCULATED", "UNABLE_TO_CALCULATE", "CALCULATED"]);
+  assert.equal(createSupplyRiskCsv(batch), '\uFEFF주문번호,자재,부족 수량\n"SO-""2""","M,1",2\n');
+});
+
+test("부족 주문이 없으면 공급 위험 CSV에 헤더만 출력한다", () => {
+  const orders = [
+    { orderId: "SO-1", customerId: "C-1", materialId: "M-1", orderQuantity: 5, availableQuantity: 5, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-01" },
+    { orderId: "SO-2", customerId: "C-1", materialId: "M-2", orderQuantity: 5, availableQuantity: 0, customerBlocked: false, materialBlocked: false },
+  ];
+  assert.equal(createSupplyRiskCsv(analyzeOrderBatch(orders)), "\uFEFF주문번호,자재,부족 수량\n");
+  assert.equal(createSupplyRiskCsv(analyzeOrderBatch([])), "\uFEFF주문번호,자재,부족 수량\n");
 });
