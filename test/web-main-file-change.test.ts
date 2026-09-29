@@ -392,6 +392,44 @@ test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하
   assertCleared(ui);
 });
 
+test("공급 위험 주문만 납기·예상금액·입력 순서로 표시하고 계산 불가 자재를 제외한다", async () => {
+  const ui = setup(true);
+  const orders = [
+    "orderId,customerId,materialId,orderQuantity,estimatedAmount,dueDate",
+    "SO-2,C-1,M-1,5,100,2026-10-02",
+    "SO-3,C-2,M-2,4,20,2026-10-01",
+    "SO-4,C-1,M-1,2,200,2026-10-01",
+    "SO-5,C-2,M-2,3,200,2026-10-01",
+    "SO-6,C-1,M-1,1,,2026-10-01",
+    "SO-7,C-1,M-3,9,999,",
+  ].join("\n");
+  await ui.select(file(orders));
+  await ui.select(file("customerId,customerBlocked\nC-1,false\nC-2,false"), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,0\nM-2,false,0\nM-3,false,0"), "material-file");
+  await ui.analyze();
+  const risk = ui.node("supply-risk-summary");
+  const table = risk.querySelector("table")!;
+  assert.ok(table);
+  assert.equal(risk.hidden, false);
+  assert.match(risk.textContent, /공급 위험: 5건/);
+  assert.match(risk.textContent, /첫 공급 위험 주문: SO-4 \(입력 행 번호 3\), 납기 2026-10-01, 부족량 2/);
+  assert.match(risk.textContent, /배분 계산 불가 자재: 1건/);
+  assert.equal(table.querySelector("caption")!.textContent, "공급 위험 주문");
+  const headers = table.querySelector("thead")!.children[0]!.children;
+  assert.deepEqual(headers.map(cell => cell.textContent), ["주문번호", "자재", "거래처", "납기일", "주문수량", "부족수량", "예상금액"]);
+  assert.ok(headers.every(cell => cell.tag === "th" && cell.attributes.get("scope") === undefined || false) === false || headers.every(cell => cell.tag === "th"));
+  assert.deepEqual(table.querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent)), [
+    ["SO-4", "M-1", "C-1", "2026-10-01", "2", "2", "200"],
+    ["SO-5", "M-2", "C-2", "2026-10-01", "3", "3", "200"],
+    ["SO-3", "M-2", "C-2", "2026-10-01", "4", "4", "20"],
+    ["SO-6", "M-1", "C-1", "2026-10-01", "1", "1", ""],
+    ["SO-2", "M-1", "C-1", "2026-10-02", "5", "5", "100"],
+  ]);
+  await ui.select(file(orders.replace("SO-2", "NEW")));
+  assertCleared(ui);
+  assert.equal(risk.querySelector("table"), null);
+});
+
 test("현재 재고로 모두 배분 가능하면 공급 위험 0건을 표시한다", async () => {
   const ui = setup(true);
   await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,30,2026-10-01\nSO-2,C-1,M-1,50,2026-10-02"));
@@ -402,6 +440,7 @@ test("현재 재고로 모두 배분 가능하면 공급 위험 0건을 표시�
   assert.equal(risk.hidden, false);
   assert.match(risk.textContent, /공급 위험: 0건/);
   assert.doesNotMatch(risk.textContent, /첫 공급 위험 주문:/);
+  assert.equal(risk.querySelector("table"), null);
   assert.equal(ui.node("exception-count").textContent, "0");
   assert.match(ui.node("stock-allocations").textContent, /모든 주문에 배분 가능/);
 });
@@ -418,5 +457,6 @@ test("배분 계산 불가 자재는 공급 위험 건수에서 제외하고 한
   assert.match(risk.textContent, /배분 계산 불가 자재: 1건.*계산 가능한 자재의 주문만 포함/);
   assert.match(risk.textContent, /계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다/);
   assert.doesNotMatch(risk.textContent, /첫 공급 위험 주문:/);
+  assert.equal(risk.querySelector("table"), null);
   assert.match(ui.node("stock-allocations").textContent, /배분 계산 불가.*납기일/);
 });
