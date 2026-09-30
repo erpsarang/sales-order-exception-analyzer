@@ -5,7 +5,7 @@ import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import { parseCsvOrders, parseCsvUpload, validateOrders } from "../src/order-csv.js";
 import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
 import { localDecisionContextProvider } from "../src/local-decision-reference.js";
-import { createOrderCsvTemplate, createUploadedReferenceOrderCsvTemplate } from "../src/order-csv-template.js";
+import { createCustomerCsvTemplate, createMaterialCsvTemplate, createOrderCsvTemplate, createUploadedReferenceOrderCsvTemplate } from "../src/order-csv-template.js";
 
 test("예제 다운로드 원본은 BOM과 필수 7개·선택 3개 열을 포함하며 기존 파서와 검증을 통과한다", () => {
   const source = createOrderCsvTemplate();
@@ -49,6 +49,40 @@ test("주문 단독용 양식은 웹 파싱에서도 주문에 직접 입력한 
   assert.notEqual(upload.referenceSource, "provider");
   assert.deepEqual(upload.orders, parseCsvOrders(source));
   validateOrders(upload.orders);
+  const batch = analyzeOrderBatch(upload.orders);
+  assert.equal(batch.summary.totalCount, 2);
+  assert.equal(batch.summary.shipReadyCount, 1);
+  assert.equal(batch.summary.exceptionCount, 1);
+});
+
+test("세 업로드용 예제 CSV는 기존 기준 공급자로 연결되어 정상과 예외 주문을 판정한다", () => {
+  const customer = createCustomerCsvTemplate();
+  const material = createMaterialCsvTemplate();
+  for (const source of [customer, material]) {
+    assert.equal(source.charCodeAt(0), 0xFEFF);
+    assert.ok(source.endsWith("\r\n"));
+  }
+  assert.deepEqual(customer.slice(1).split("\r\n")[0]!.split(","), ["customerId", "customerBlocked"]);
+  assert.deepEqual(material.slice(1).split("\r\n")[0]!.split(","), ["materialId", "materialBlocked", "availableQuantity"]);
+  const upload = parseCsvUpload(
+    createUploadedReferenceOrderCsvTemplate(),
+    createCsvDecisionContextProvider(customer, material),
+  );
+  assert.equal(upload.referenceSource, "provider");
+  assert.doesNotThrow(() => validateOrders(upload.orders));
+  assert.deepEqual(upload.orders.map(({ customerId, materialId, availableQuantity, customerBlocked, materialBlocked }) => ({
+    customerId, materialId, availableQuantity, customerBlocked, materialBlocked,
+  })), [
+    { customerId: "EXAMPLE-C001", materialId: "EXAMPLE-M001", availableQuantity: 20, customerBlocked: false, materialBlocked: false },
+    { customerId: "EXAMPLE-C002", materialId: "EXAMPLE-M002", availableQuantity: 3, customerBlocked: true, materialBlocked: true },
+  ]);
+  assert.deepEqual(upload.orders.map((order) => {
+    const { status, reasonCodes } = analyzeOrder(order);
+    return { status, reasonCodes };
+  }), [
+    { status: "SHIP_READY", reasonCodes: [] },
+    { status: "EXCEPTION", reasonCodes: ["CUSTOMER_BLOCKED", "MATERIAL_BLOCKED", "INSUFFICIENT_STOCK"] },
+  ]);
   const batch = analyzeOrderBatch(upload.orders);
   assert.equal(batch.summary.totalCount, 2);
   assert.equal(batch.summary.shipReadyCount, 1);
