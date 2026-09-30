@@ -157,10 +157,29 @@ supplyRiskDownloadButton.id = "supply-risk-download-button";
 supplyRiskDownloadButton.type = "button";
 supplyRiskDownloadButton.textContent = "공급 위험 CSV 다운로드";
 supplyRiskDownloadButton.hidden = true;
-function renderSupplyRisk(allocations: StockAllocationResult[]): void {
+function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
+  const allocations = batch.stockAllocations;
   const calculated = allocations.filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED");
-  const shortages = calculated.flatMap(allocation => allocation.items.filter(item => item.shortageQuantity > 0));
-  shortages.sort((left, right) => left.dueDate < right.dueDate ? -1 : left.dueDate > right.dueDate ? 1 : left.resultIndex - right.resultIndex);
+  const shortages = calculated.flatMap(allocation => allocation.items
+    .filter(item => item.shortageQuantity > 0)
+    .map(item => {
+      const orderDetails = batch.results[item.resultIndex]!.orderDetails;
+      const amount = orderDetails.estimatedAmount;
+      return {
+        ...item,
+        orderDetails,
+        estimatedAmount: typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : null,
+      };
+    }));
+  shortages.sort((left, right) => {
+    if (left.dueDate !== right.dueDate) return left.dueDate < right.dueDate ? -1 : 1;
+    if (left.estimatedAmount !== right.estimatedAmount) {
+      if (left.estimatedAmount === null) return 1;
+      if (right.estimatedAmount === null) return -1;
+      return right.estimatedAmount - left.estimatedAmount;
+    }
+    return left.resultIndex - right.resultIndex;
+  });
   const unableCount = allocations.filter(allocation => allocation.status === "UNABLE_TO_CALCULATE").length;
   const heading = document.createElement("h2");
   heading.textContent = "공급 위험 (누적 재고 배분)";
@@ -175,6 +194,28 @@ function renderSupplyRisk(allocations: StockAllocationResult[]): void {
     const onset = document.createElement("p");
     onset.textContent = `첫 공급 위험 주문: ${first.orderId} (입력 행 번호 ${first.resultIndex + 1}), 납기 ${first.dueDate}, 부족량 ${first.shortageQuantity}`;
     supplyRiskSection.append(onset);
+    const table = document.createElement("table");
+    const caption = document.createElement("caption");
+    caption.textContent = "공급 위험 주문";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    for (const label of ["주문번호", "자재", "거래처", "납기일", "주문수량", "부족수량", "예상금액"]) {
+      const header = document.createElement("th");
+      header.scope = "col";
+      header.textContent = label;
+      headerRow.append(header);
+    }
+    head.append(headerRow);
+    const body = document.createElement("tbody");
+    for (const item of shortages) {
+      const row = document.createElement("tr");
+      const amountCell = document.createElement("td");
+      amountCell.textContent = item.estimatedAmount === null ? "" : String(item.estimatedAmount);
+      row.append(cell(item.orderId), cell(item.materialId), cell(item.orderDetails.customerId), cell(item.dueDate), cell(item.orderDetails.orderQuantity), cell(item.shortageQuantity), amountCell);
+      body.append(row);
+    }
+    table.append(caption, head, body);
+    supplyRiskSection.append(table);
   }
   if (unableCount > 0) {
     const unable = document.createElement("p");
@@ -436,7 +477,7 @@ analyzeButton.addEventListener("click", async () => {
     exceptionTable.hidden = !hasExceptions;
     emptyMessage.hidden = hasExceptions;
     renderReference(upload, uploaded);
-    renderSupplyRisk(batch.stockAllocations);
+    renderSupplyRisk(batch);
     renderAllocations(batch.stockAllocations);
     exceptionCsv = csv;
     supplyRiskBatch = batch;
