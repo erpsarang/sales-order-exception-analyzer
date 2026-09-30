@@ -88,19 +88,23 @@ for (const text of [
   uploadHelp.append(paragraph);
 }
 const templateNotice = document.createElement("p");
-templateNotice.textContent = "두 양식은 예제 주문 2건을 담고 있습니다. 실제 업무에서는 주문 데이터를 교체하세요. 주문 단독용은 기준값도 교체해야 하며, 예제 값으로는 정상 1건과 차단·재고 부족 1건입니다. 기준 CSV 업로드용의 분석 결과는 함께 선택한 기준 파일의 값에 따라 달라집니다.";
+templateNotice.textContent = "주문 양식 두 개는 예제 주문 2건을 담고 있습니다. 기준 CSV 업로드용 주문 양식과 아래 고객 및 자재·재고 기준 CSV는 서로 맞는 예제 데이터이므로 함께 내려받아 분석해 볼 수 있습니다. 실제 업무에서는 세 파일의 주문·고객·자재·재고 값을 교체하세요. 주문 단독용도 주문과 기준값을 교체해야 합니다. 제공된 예제 값으로는 정상 1건과 차단·재고 부족 1건입니다.";
 uploadHelp.append(templateNotice);
 for (const template of [
-  { label: "주문 단독용 CSV 양식 다운로드", filename: "example-order-template.csv", uploaded: false },
-  { label: "기준 CSV 업로드용 주문 양식 다운로드", filename: "example-order-upload-template.csv", uploaded: true },
-]) {
+  { label: "주문 단독용 CSV 양식 다운로드", filename: "example-order-template.csv", kind: "single" },
+  { label: "기준 CSV 업로드용 주문 양식 다운로드", filename: "example-order-upload-template.csv", kind: "uploaded" },
+  { label: "고객 기준 예제 CSV 다운로드", filename: "example-customer-reference.csv", kind: "customer" },
+  { label: "자재·재고 기준 예제 CSV 다운로드", filename: "example-material-reference.csv", kind: "material" },
+] as const) {
   const templateDownloadButton = document.createElement("button");
   templateDownloadButton.type = "button";
   templateDownloadButton.textContent = template.label;
   uploadHelp.append(templateDownloadButton);
   templateDownloadButton.addEventListener("click", async () => {
-    const { createOrderCsvTemplate, createUploadedReferenceOrderCsvTemplate } = await import("./order-csv-template.js");
-    const csv = template.uploaded ? createUploadedReferenceOrderCsvTemplate() : createOrderCsvTemplate();
+    const { createOrderCsvTemplate, createUploadedReferenceOrderCsvTemplate, createCustomerCsvTemplate, createMaterialCsvTemplate } = await import("./order-csv-template.js");
+    const csv = template.kind === "single" ? createOrderCsvTemplate()
+      : template.kind === "uploaded" ? createUploadedReferenceOrderCsvTemplate()
+      : template.kind === "customer" ? createCustomerCsvTemplate() : createMaterialCsvTemplate();
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;

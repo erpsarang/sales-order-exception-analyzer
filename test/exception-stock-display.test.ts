@@ -8,6 +8,7 @@ import type { OrderInput } from "../src/order-analysis.js";
 import * as orderCsv from "../src/order-csv.js";
 import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
 import { localDecisionContextProvider } from "../src/local-decision-reference.js";
+import * as orderCsvTemplate from "../src/order-csv-template.js";
 import { formatOrderSummary } from "../src/order-summary.js";
 
 const labels = ["주문번호", "자재", "수량", "가용재고", "부족 수량", "거래처", "예상금액", "납기일", "주문 코멘트", "예외 사유"];
@@ -91,6 +92,11 @@ class ElementDouble {
   }
   addEventListener(event: string, listener: () => void | Promise<void>): void { this.listeners.set(event, listener); }
   click(): void { void this.listeners.get("click")?.(); }
+  remove(): void {
+    if (!this.parent) return;
+    this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = undefined;
+  }
 }
 const source = readFileSync(new URL("../src/web-main.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -117,6 +123,7 @@ function setup() {
     "./order-csv.js": orderCsv,
     "./csv-decision-reference.js": { createCsvDecisionContextProvider },
     "./local-decision-reference.js": { localDecisionContextProvider },
+    "./order-csv-template.js": orderCsvTemplate,
     "./order-summary.js": { formatOrderSummary },
   };
   runInNewContext(compiled, {
@@ -128,6 +135,7 @@ function setup() {
       return element;
     } },
     URL: { createObjectURL: (blob: Blob) => { downloads.push(blob); return "blob:test"; }, revokeObjectURL: () => {} },
+    window: { setTimeout: (callback: () => void) => callback() },
   });
   return {
     get, head, body, downloads, filenames,
@@ -136,6 +144,42 @@ function setup() {
     download: async () => { await get("download-button").listeners.get("click")!(); },
   };
 }
+test("화면에서 내려받은 주문·고객·자재 예제 CSV 세 파일을 업로드해 분석한다", async () => {
+  const ui = setup();
+  const help = ui.get("csv-upload-help");
+  assert.match(help.textContent, /서로 맞는 예제 데이터/);
+  const labels = [
+    "기준 CSV 업로드용 주문 양식 다운로드",
+    "고객 기준 예제 CSV 다운로드",
+    "자재·재고 기준 예제 CSV 다운로드",
+  ];
+  for (const label of labels) {
+    const button = help.children.find(node => node.tagName === "button" && node.textContent === label);
+    assert.ok(button, label);
+    await button.listeners.get("click")!();
+  }
+  assert.deepEqual(ui.filenames, [
+    "example-order-upload-template.csv",
+    "example-customer-reference.csv",
+    "example-material-reference.csv",
+  ]);
+  const [orders, customers, materials] = await Promise.all(ui.downloads.map(readDownload));
+  assert.equal(orders, orderCsvTemplate.createUploadedReferenceOrderCsvTemplate());
+  assert.equal(customers, orderCsvTemplate.createCustomerCsvTemplate());
+  assert.equal(materials, orderCsvTemplate.createMaterialCsvTemplate());
+  await ui.select("csv-file", orders);
+  await ui.select("customer-file", customers);
+  await ui.select("material-file", materials);
+  await ui.analyze();
+  assert.equal(ui.get("error-message").hidden, true);
+  assert.equal(ui.get("result-section").hidden, false);
+  assert.equal(ui.get("total-count").textContent, "2");
+  assert.equal(ui.get("ready-count").textContent, "1");
+  assert.equal(ui.get("exception-count").textContent, "1");
+  assert.match(ui.get("reference-provenance").textContent, /업로드 기준 분석/);
+  assert.deepEqual(ui.body.children.map(row => row.children[0]!.textContent), ["EXAMPLE-002"]);
+});
+
 test("web renders accessible headers and row-specific stock values in CSV column order", async () => {
   const ui = setup();
   const headers = ui.head.children[0]!.children;

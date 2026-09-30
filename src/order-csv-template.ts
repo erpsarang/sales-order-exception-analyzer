@@ -17,3 +17,23 @@ export function createUploadedReferenceOrderCsvTemplate(): string {
   ];
   return `\uFEFF${rows.join("\r\n")}\r\n`;
 }
+
+/** 기준 CSV 업로드용 주문 예제의 고객 식별자에 맞춘 예제 기준입니다. */
+export function createCustomerCsvTemplate(): string {
+  const rows = [
+    "customerId,customerBlocked",
+    "EXAMPLE-C001,false",
+    "EXAMPLE-C002,true",
+  ];
+  return `\uFEFF${rows.join("\r\n")}\r\n`;
+}
+
+/** 기준 CSV 업로드용 주문 예제의 자재 식별자에 맞춘 예제 기준입니다. */
+export function createMaterialCsvTemplate(): string {
+  const rows = [
+    "materialId,materialBlocked,availableQuantity",
+    "EXAMPLE-M001,false,20",
+    "EXAMPLE-M002,true,3",
+  ];
+  return `\uFEFF${rows.join("\r\n")}\r\n`;
+}
