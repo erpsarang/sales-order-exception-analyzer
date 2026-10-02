@@ -140,7 +140,7 @@ test("정상 판정 주문의 누적 배분 부족을 공급 위험 CSV에 포�
   const batch = analyzeOrderBatch(orders);
   assert.deepEqual(batch.results.map((result) => result.status), ["SHIP_READY", "SHIP_READY"]);
   assert.equal(createExceptionCsv(orders, batch), "\uFEFF주문번호,자재,수량,거래처,예상금액,납기일,주문 코멘트,예외 사유\n");
-  assert.equal(createSupplyRiskCsv(batch), "\uFEFF주문번호,자재,부족 수량\nSO-2,M-1,2\n");
+  assert.equal(createSupplyRiskCsv(batch), "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\nSO-2,M-1,C-1,2026-10-02,6,2,\n");
 });
 
 test("공급 위험 CSV는 계산 불가 자재와 부족량 0을 제외하고 셀을 이스케이프한다", () => {
@@ -152,7 +152,7 @@ test("공급 위험 CSV는 계산 불가 자재와 부족량 0을 제외하고 �
   ];
   const batch = analyzeOrderBatch(orders);
   assert.deepEqual(batch.stockAllocations.map((allocation) => allocation.status), ["CALCULATED", "UNABLE_TO_CALCULATE", "CALCULATED"]);
-  assert.equal(createSupplyRiskCsv(batch), '\uFEFF주문번호,자재,부족 수량\n"SO-""2""","M,1",2\n');
+  assert.equal(createSupplyRiskCsv(batch), '\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\n"SO-""2""","M,1",C-1,2026-10-02,6,2,\n');
 });
 
 test("부족 주문이 없으면 공급 위험 CSV에 헤더만 출력한다", () => {
@@ -160,6 +160,31 @@ test("부족 주문이 없으면 공급 위험 CSV에 헤더만 출력한다", (
     { orderId: "SO-1", customerId: "C-1", materialId: "M-1", orderQuantity: 5, availableQuantity: 5, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-01" },
     { orderId: "SO-2", customerId: "C-1", materialId: "M-2", orderQuantity: 5, availableQuantity: 0, customerBlocked: false, materialBlocked: false },
   ];
-  assert.equal(createSupplyRiskCsv(analyzeOrderBatch(orders)), "\uFEFF주문번호,자재,부족 수량\n");
-  assert.equal(createSupplyRiskCsv(analyzeOrderBatch([])), "\uFEFF주문번호,자재,부족 수량\n");
+  assert.equal(createSupplyRiskCsv(analyzeOrderBatch(orders)), "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\n");
+  assert.equal(createSupplyRiskCsv(analyzeOrderBatch([])), "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\n");
+});
+
+test("공급 위험 CSV는 납기, 예상금액, 입력 순서로 정렬하고 빈·음수 금액은 빈 셀로 뒤에 둔다", () => {
+  const make = (orderId: string, dueDate: string, estimatedAmount?: number) => ({
+    orderId, customerId: "C-1", materialId: "M-1", orderQuantity: 1, availableQuantity: 0, customerBlocked: false, materialBlocked: false, dueDate,
+    ...(estimatedAmount === undefined ? {} : { estimatedAmount }),
+  });
+  const orders = [
+    make("A", "2026-10-02", 100),
+    make("B", "2026-10-01", 20),
+    make("C", "2026-10-01", 200),
+    make("D", "2026-10-01"),
+    make("E", "2026-10-01", -5),
+    make("F", "2026-10-01", 200),
+  ];
+  assert.equal(createSupplyRiskCsv(analyzeOrderBatch(orders)), [
+    "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액",
+    "C,M-1,C-1,2026-10-01,1,1,200",
+    "F,M-1,C-1,2026-10-01,1,1,200",
+    "B,M-1,C-1,2026-10-01,1,1,20",
+    "D,M-1,C-1,2026-10-01,1,1,",
+    "E,M-1,C-1,2026-10-01,1,1,",
+    "A,M-1,C-1,2026-10-02,1,1,100",
+    "",
+  ].join("\n"));
 });
