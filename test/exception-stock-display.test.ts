@@ -226,7 +226,7 @@ test("주문별 예외가 없어도 누적 부족 주문을 공급 위험 CSV로
   assert.match(ui.get("supply-risk-summary").textContent, /공급 위험: 1건/);
   riskButton.click();
   assert.deepEqual(ui.filenames, ["supply-risk-orders.csv"]);
-  assert.equal(await readDownload(ui.downloads[0]!), "\uFEFF주문번호,자재,부족 수량\nSO-2,M-1,2\n");
+  assert.equal(await readDownload(ui.downloads[0]!), "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\nSO-2,M-1,C-1,2026-10-02,6,2,\n");
   await ui.download();
   assert.equal(ui.downloads.length, 1);
 });
