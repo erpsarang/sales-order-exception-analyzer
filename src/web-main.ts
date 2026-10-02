@@ -225,6 +225,16 @@ function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
     const unable = document.createElement("p");
     unable.textContent = `배분 계산 불가 자재: ${unableCount}건. 공급 위험 건수는 계산 가능한 자재의 주문만 포함합니다.`;
     supplyRiskSection.append(unable);
+    const unableGuidance = document.createElement("p");
+    unableGuidance.textContent = "CSV에서 해당 자재의 주문 행을 보완한 뒤 다시 분석하세요.";
+    const unableList = document.createElement("ul");
+    for (const allocation of allocations) {
+      if (allocation.status !== "UNABLE_TO_CALCULATE") continue;
+      const unableItem = document.createElement("li");
+      unableItem.textContent = `${allocation.materialId}: ${allocation.reasons.map(reason => allocationReasonLabels[reason]).join(", ")}`;
+      unableList.append(unableItem);
+    }
+    supplyRiskSection.append(unableGuidance, unableList);
     if (calculated.length === 0) {
       const unknown = document.createElement("p");
       unknown.textContent = "계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다.";
@@ -235,7 +245,7 @@ function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
   supplyRiskSection.hidden = false;
 }
 const allocationReasonLabels: Record<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY", string> = {
-  INVALID_DUE_DATE: "납기일 누락 또는 유효하지 않음",
+  INVALID_DUE_DATE: "납기일이 없거나 올바르지 않음",
   INVALID_QUANTITY: "주문 수량이 유효하지 않음",
   INVALID_AVAILABLE_QUANTITY: "가용재고가 유효하지 않음",
   CONFLICTING_AVAILABLE_QUANTITY: "같은 자재의 가용재고 값이 서로 다름",
