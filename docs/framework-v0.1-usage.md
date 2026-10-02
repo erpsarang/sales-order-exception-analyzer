@@ -1,5 +1,7 @@
 # AI Development Framework 사용 가이드
 
+> **역사 기록.** 이 문서는 v0.1의 `SI-승인` 입구를 설명한다. 그 입구는 Framework PR #355에서 삭제됐고, 현재는 `[업무 요구]` Issue → Read-only AI PLAN → `PLAN-승인` 경로만 있다. Codex Worker 서술은 당시 adapter이며 현재 AI 호출은 팀 소유 Private subscription executor(Claude Max)로 간다. 현행 흐름은 Framework 저장소의 `docs/usage.md`를 본다.
+
 이 문서는 **신규 프로그래밍 요구사항을 AI Development Framework v0.1에 넣어 실제 개발 사이클을 시작하는 방법**을 설명합니다.
 
 ## 1. 언제 사용하는가
