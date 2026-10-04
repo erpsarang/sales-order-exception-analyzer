@@ -54,10 +54,8 @@ test("같은 납기는 입력 위치로 정렬하고 차단된 주문도 수요�
   assert.deepEqual(batch.results[1]!.reasonCodes, []);
 });
 
-test("납기, 주문수량, 가용재고가 유효하지 않거나 재고 값이 충돌하면 자재 전체를 계산 불가로 표시한다", () => {
+test("가용재고가 유효하지 않거나 재고 값이 충돌하면 자재 전체를 계산 불가로 표시한다", () => {
   const cases: Array<{ orders: OrderInput[]; reason: string }> = [
-    { orders: [{ ...base, dueDate: "2026-02-30" }, base], reason: "INVALID_DUE_DATE" },
-    { orders: [{ ...base, orderQuantity: 0 }, base], reason: "INVALID_QUANTITY" },
     { orders: [{ ...base, availableQuantity: -1 }, { ...base, availableQuantity: -1 }], reason: "INVALID_AVAILABLE_QUANTITY" },
     { orders: [base, { ...base, availableQuantity: 90 }], reason: "CONFLICTING_AVAILABLE_QUANTITY" },
   ];
@@ -84,4 +82,62 @@ test("한 자재의 계산 불가는 다른 자재의 배분에 영향을 주지
   assert.notStrictEqual(first.stockAllocations, second.stockAllocations);
   assert.deepEqual(first, second);
   assert.deepEqual(analyzeOrderBatch([]).stockAllocations, []);
+});
+
+test("납기일이 없는 주문만 제외하고 나머지 주문으로 누적 배분하며 제외 주문을 남긴다", () => {
+  const orders: OrderInput[] = [
+    { ...base, orderId: "A", orderQuantity: 15, availableQuantity: 20, dueDate: "2026-10-01" },
+    { ...base, orderId: "B", orderQuantity: 5, availableQuantity: 20, dueDate: "" },
+    { ...base, orderId: "C", orderQuantity: 10, availableQuantity: 20, dueDate: "2026-10-02" },
+  ];
+  const batch = analyzeOrderBatch(orders);
+  assert.deepEqual(batch.stockAllocations, [{
+    materialId: "M-1", status: "CALCULATED", availableQuantity: 20,
+    items: [
+      { resultIndex: 0, orderId: "A", materialId: "M-1", dueDate: "2026-10-01", allocatableQuantity: 20, allocatedQuantity: 15, remainingQuantity: 5, shortageQuantity: 0 },
+      { resultIndex: 2, orderId: "C", materialId: "M-1", dueDate: "2026-10-02", allocatableQuantity: 5, allocatedQuantity: 5, remainingQuantity: 0, shortageQuantity: 5 },
+    ],
+    excludedOrders: [{ resultIndex: 1, orderId: "B", reasons: ["INVALID_DUE_DATE"] }],
+  }]);
+  assert.equal(Object.keys(batch).includes("stockAllocations"), false);
+});
+
+test("수량이 0 이하인 주문과 두 사유가 모두 해당하는 주문을 제외 사유와 함께 남긴다", () => {
+  const orders: OrderInput[] = [
+    { ...base, orderId: "Z", orderQuantity: 0, dueDate: "2026-10-01" },
+    { ...base, orderId: "Y", orderQuantity: -3, dueDate: "2026-02-30" },
+    { ...base, orderId: "V", orderQuantity: 40, availableQuantity: 100 },
+  ];
+  const allocation = analyzeOrderBatch(orders).stockAllocations[0]!;
+  assert.equal(allocation.status, "CALCULATED");
+  if (allocation.status !== "CALCULATED") return;
+  assert.deepEqual(allocation.items.map((item) => [item.orderId, item.allocatedQuantity, item.shortageQuantity]), [["V", 40, 0]]);
+  assert.deepEqual(allocation.excludedOrders, [
+    { resultIndex: 0, orderId: "Z", reasons: ["INVALID_QUANTITY"] },
+    { resultIndex: 1, orderId: "Y", reasons: ["INVALID_DUE_DATE", "INVALID_QUANTITY"] },
+  ]);
+});
+
+test("유효 주문이 하나도 남지 않으면 제외 사유로 자재 전체를 계산 불가로 둔다", () => {
+  const orders: OrderInput[] = [
+    { ...base, orderId: "A", dueDate: "" },
+    { ...base, orderId: "B", orderQuantity: 0 },
+  ];
+  const allocation = analyzeOrderBatch(orders).stockAllocations[0]!;
+  assert.deepEqual(allocation, {
+    materialId: "M-1", status: "UNABLE_TO_CALCULATE", reasons: ["INVALID_DUE_DATE", "INVALID_QUANTITY"], items: [],
+  });
+  assert.equal("excludedOrders" in allocation, false);
+});
+
+test("재고 값이 충돌하면 제외 주문이 있어도 자재 전체를 계산 불가로 둔다", () => {
+  const orders: OrderInput[] = [
+    { ...base, orderId: "A", dueDate: "" },
+    { ...base, orderId: "B" },
+    { ...base, orderId: "C", availableQuantity: 90 },
+  ];
+  const allocation = analyzeOrderBatch(orders).stockAllocations[0]!;
+  assert.equal(allocation.status, "UNABLE_TO_CALCULATE");
+  if (allocation.status === "UNABLE_TO_CALCULATE") assert.deepEqual(allocation.reasons, ["CONFLICTING_AVAILABLE_QUANTITY"]);
+  assert.deepEqual(allocation.items, []);
 });

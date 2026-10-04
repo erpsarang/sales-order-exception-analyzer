@@ -49,6 +49,7 @@ export type StockAllocationResult = {
   status: "CALCULATED";
   availableQuantity: number;
   items: StockAllocationItem[];
+  excludedOrders?: Array<{ resultIndex: number; orderId: string; reasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY"> }>;
 } | {
   materialId: string;
   status: "UNABLE_TO_CALCULATE";
@@ -109,8 +110,6 @@ function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAlloca
   const allocations: StockAllocationResult[] = [];
   for (const [materialId, group] of groups) {
     const reasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY"> = [];
-    if (group.some(({ order }) => validDueDate(order.dueDate) === null)) reasons.push("INVALID_DUE_DATE");
-    if (group.some(({ order }) => !validOrderQuantity(order.orderQuantity))) reasons.push("INVALID_QUANTITY");
     if (group.some(({ order }) => !validAvailableQuantity(order.availableQuantity))) reasons.push("INVALID_AVAILABLE_QUANTITY");
     if (group.some(({ order }) => order.availableQuantity !== group[0]!.order.availableQuantity)) reasons.push("CONFLICTING_AVAILABLE_QUANTITY");
     if (reasons.length > 0) {
@@ -119,8 +118,29 @@ function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAlloca
     }
 
     const availableQuantity = group[0]!.order.availableQuantity;
+    // 납기일이 없거나 올바르지 않은 주문, 수량이 0 이하인 주문만 제외하고 나머지로 배분한다.
+    const validGroup: typeof group = [];
+    const excludedOrders: Array<{ resultIndex: number; orderId: string; reasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY"> }> = [];
+    for (const entry of group) {
+      const exclusionReasons: Array<"INVALID_DUE_DATE" | "INVALID_QUANTITY"> = [];
+      if (validDueDate(entry.order.dueDate) === null) exclusionReasons.push("INVALID_DUE_DATE");
+      if (!validOrderQuantity(entry.order.orderQuantity)) exclusionReasons.push("INVALID_QUANTITY");
+      if (exclusionReasons.length > 0) excludedOrders.push({ resultIndex: entry.resultIndex, orderId: entry.order.orderId, reasons: exclusionReasons });
+      else validGroup.push(entry);
+    }
+    if (validGroup.length === 0) {
+      // 유효 주문이 없으면 0건 결과로 안심시키지 않고 자재 전체를 계산 불가로 둔다.
+      allocations.push({
+        materialId,
+        status: "UNABLE_TO_CALCULATE",
+        reasons: [...new Set(excludedOrders.flatMap((excluded) => excluded.reasons))],
+        items: [],
+      });
+      continue;
+    }
+
     let remaining = availableQuantity;
-    const items = [...group]
+    const items = [...validGroup]
       .sort((left, right) => {
         const leftDate = left.order.dueDate!;
         const rightDate = right.order.dueDate!;
@@ -141,7 +161,10 @@ function allocateStock(orders: ReadonlyArray<Readonly<OrderInput>>): StockAlloca
           shortageQuantity: order.orderQuantity - allocatedQuantity,
         };
       });
-    allocations.push({ materialId, status: "CALCULATED", availableQuantity, items });
+    allocations.push({
+      materialId, status: "CALCULATED", availableQuantity, items,
+      ...(excludedOrders.length > 0 ? { excludedOrders } : {}),
+    });
   }
   return allocations;
 }
