@@ -155,6 +155,17 @@ test("공급 위험 CSV는 계산 불가 자재와 부족량 0을 제외하고 �
   assert.equal(createSupplyRiskCsv(batch), '\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\n"SO-""2""","M,1",C-1,2026-10-02,6,2,\n');
 });
 
+test("납기일이 없는 주문만 제외하고 같은 자재의 나머지 주문 부족을 공급 위험 CSV에 포함한다", () => {
+  const make = (orderId: string, orderQuantity: number, dueDate?: string) => ({
+    orderId, customerId: "C-1", materialId: "M-1", orderQuantity, availableQuantity: 20, customerBlocked: false, materialBlocked: false,
+    ...(dueDate === undefined ? {} : { dueDate }),
+  });
+  const orders = [make("SO-1", 15, "2026-10-01"), make("SO-2", 5), make("SO-3", 10, "2026-10-02")];
+  const batch = analyzeOrderBatch(orders);
+  assert.equal(batch.stockAllocations[0]!.status, "CALCULATED");
+  assert.equal(createSupplyRiskCsv(batch), "\uFEFF주문번호,자재,거래처,납기일,주문수량,부족수량,예상금액\nSO-3,M-1,C-1,2026-10-02,10,5,\n");
+});
+
 test("부족 주문이 없으면 공급 위험 CSV에 헤더만 출력한다", () => {
   const orders = [
     { orderId: "SO-1", customerId: "C-1", materialId: "M-1", orderQuantity: 5, availableQuantity: 5, customerBlocked: false, materialBlocked: false, dueDate: "2026-10-01" },

@@ -448,7 +448,7 @@ test("현재 재고로 모두 배분 가능하면 공급 위험 0건을 표시�
 test("계산 불가 자재의 ID와 사유를 목록으로 표시하고 보완 후 재분석하면 목록에서 사라진다", async () => {
   const ui = setup(true);
   const header = "orderId,customerId,materialId,orderQuantity,dueDate";
-  const broken = [header, "SO-1,C-1,M-1,30,2026-10-01", "SO-2,C-1,M-1,50,", "SO-3,C-1,M-2,5,2026-10-01"].join("\n");
+  const broken = [header, "SO-1,C-1,M-1,30,", "SO-2,C-1,M-1,50,", "SO-3,C-1,M-2,5,2026-10-01"].join("\n");
   const fixed = [header, "SO-1,C-1,M-1,30,2026-10-01", "SO-2,C-1,M-1,50,2026-10-02", "SO-3,C-1,M-2,5,2026-10-01"].join("\n");
   await ui.select(file(broken));
   await ui.select(file(customers), "customer-file");
@@ -471,12 +471,24 @@ test("계산 불가 자재의 ID와 사유를 목록으로 표시하고 보완 �
 
 test("주문 수량 오류 자재도 자재 ID와 사유로 표시한다", async () => {
   const ui = setup(true);
-  await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,0,2026-10-01\nSO-2,C-1,M-1,5,2026-10-02"));
+  await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,0,2026-10-01\nSO-2,C-1,M-1,0,2026-10-02"));
   await ui.select(file(customers), "customer-file");
   await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,100"), "material-file");
   await ui.analyze();
   const list = ui.node("supply-risk-summary").querySelector("ul")!;
   assert.deepEqual(list.children.map(item => item.textContent), ["M-1: 주문 수량이 유효하지 않음"]);
+});
+
+test("일부 주문만 납기일이 없으면 그 자재는 계산 불가가 아니고 나머지 주문의 공급 위험을 표시한다", async () => {
+  const ui = setup(true);
+  await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,30,2026-10-01\nSO-2,C-1,M-1,50,"));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,20"), "material-file");
+  await ui.analyze();
+  const risk = ui.node("supply-risk-summary");
+  assert.match(risk.textContent, /공급 위험: 1건/);
+  assert.doesNotMatch(risk.textContent, /배분 계산 불가 자재/);
+  assert.equal(risk.querySelector("ul"), null);
 });
 
 test("배분 계산 불가 자재는 공급 위험 건수에서 제외하고 한계를 표시한다", async () => {
