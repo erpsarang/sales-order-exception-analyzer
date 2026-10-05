@@ -46,7 +46,7 @@ for (const schema of schemas) {
       assert.throws(() => schema.create(source), new RegExp(`${schema.kind}.*1번째 행.*필수 필드 ${missing}`));
     }
     assert.throws(() => schema.create(`${schema.header},${schema.idField}`), new RegExp(`${schema.kind}.*1번째 행.*${schema.idField}.*중복`));
-    assert.throws(() => schema.create(`${schema.header},unknown`), new RegExp(`${schema.kind}.*1번째 행.*알 수 없는 필드.*unknown`));
+    assert.doesNotThrow(() => schema.create(`${schema.header},unknown`));
   });
 
   test(`${schema.kind} CSV의 열 개수와 인용 구문 오류에 위치와 원인이 있다`, () => {
@@ -236,4 +236,32 @@ test("실제 CSV 공급자로 보강한 주문과 전체 배치 결과는 판정
   assert.deepEqual(parseCsvUpload(business, provider), actual);
   actual.orders[0]!.availableQuantity = 0;
   assert.deepEqual(parseCsvUpload(business, provider).orders, expected.orders);
+});
+
+test("필수 열 외의 참고 열은 무시하고 추가 열이 없는 데이터와 같은 결과를 낸다", () => {
+  const base = createCsvDecisionContextProvider(customerCsv, materialCsv);
+  const extended = createCsvDecisionContextProvider(
+    "customerId,customerName,customerBlocked\nC-1,고객1,false\nC-2,,true\n",
+    "materialId,materialName,materialBlocked,availableQuantity,unit\nM-1,자재1,false,20,EA\nM-2,not-a-number,true,-1,\n",
+  );
+  for (const id of ["C-1", "C-2", "C-missing", "고객1"]) assert.equal(extended.getCustomerBlocked(id), base.getCustomerBlocked(id));
+  for (const id of ["M-1", "M-2", "M-missing", "EA"]) {
+    assert.equal(extended.getMaterialBlocked(id), base.getMaterialBlocked(id));
+    assert.equal(extended.getAvailableQuantity(id), base.getAvailableQuantity(id));
+  }
+  const orders = `${businessHeader},dueDate\nSO-1,C-1,M-1,12,2026-10-01\nSO-2,C-2,M-1,12,2026-10-02\nSO-3,C-1,M-2,1,2026-10-03\n`;
+  const actual = parseCsvUpload(orders, extended);
+  const expected = parseCsvUpload(orders, base);
+  assert.deepEqual(actual, expected);
+  assert.deepEqual(analyzeOrderBatch(actual.orders), analyzeOrderBatch(expected.orders));
+  // 추가 열끼리 이름이 같아도 판정에 쓰지 않으므로 오류가 아니다.
+  assert.doesNotThrow(() => createCsvDecisionContextProvider("customerId,note,note,customerBlocked\nC-1,a,b,false", materialCsv));
+});
+
+test("추가 열이 있어도 필수 열 누락·중복과 형식 오류는 위치와 함께 거부한다", () => {
+  assert.throws(() => createCsvDecisionContextProvider("customerId,customerName\nC-1,x", materialCsv), /고객.*1번째 행.*필수 필드 customerBlocked/);
+  assert.throws(() => createCsvDecisionContextProvider(customerCsv, "materialId,materialId,materialName,materialBlocked,availableQuantity\nM-1,M-1,x,false,1"), /자재\/재고.*1번째 행 헤더 2번째 열.*materialId.*중복/);
+  assert.throws(() => createCsvDecisionContextProvider("customerId,customerName,customerBlocked\nC-1,x,TRUE", materialCsv), /고객.*1번째 행 customerBlocked.*true 또는 false/);
+  assert.throws(() => createCsvDecisionContextProvider(customerCsv, "materialId,materialName,materialBlocked,availableQuantity\nM-1,x,false,nope"), /자재\/재고.*1번째 행 availableQuantity.*유한한 숫자/);
+  assert.throws(() => createCsvDecisionContextProvider("customerId,customerName,customerBlocked\nC-1,x,false\nC-1,y,true", materialCsv), /고객.*2번째 행 customerId.*중복/);
 });
