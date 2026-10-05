@@ -19,10 +19,10 @@
         <p id="order-help" class="hint">기본 필수 열: orderId, customerId, materialId, orderQuantity. 선택 열: estimatedAmount, dueDate, orderComment. 아래에서 분석 방식에 맞는 주문 CSV 양식을 다운로드하세요.</p>
         <label for="customer-file">고객 기준 CSV</label>
         <input id="customer-file" type="file" accept=".csv,text/csv" aria-describedby="customer-help" />
-        <p id="customer-help" class="hint">필수 열: customerId, customerBlocked. 선택 열 없음.</p>
+        <p id="customer-help" class="hint">필수 열: customerId, customerBlocked. 필수 열 외의 열은 무시됩니다. 필수 열이 없거나 두 번 나오면 오류입니다.</p>
         <label for="material-file">자재/재고 기준 CSV</label>
         <input id="material-file" type="file" accept=".csv,text/csv" aria-describedby="material-help" />
-        <p id="material-help" class="hint">필수 열: materialId, materialBlocked, availableQuantity. 선택 열 없음.</p>
+        <p id="material-help" class="hint">필수 열: materialId, materialBlocked, availableQuantity. 필수 열 외의 열은 무시됩니다. 필수 열이 없거나 두 번 나오면 오류입니다.</p>
         <p class="hint">업로드 기준 분석: 기준 CSV 업로드용 주문 양식과 고객·자재/재고 기준 CSV 두 개를 함께 선택하세요. 이 양식에는 직접 판정 열이 없어 열을 제거할 필요가 없습니다. 주문의 고객·자재 식별자는 기준 파일과 정확히 일치해야 합니다.</p>
         <p class="hint">주문 단독 분석: 주문 단독용 양식의 availableQuantity, customerBlocked, materialBlocked에 기준값을 입력하고 주문 CSV만 선택하세요. 기준 파일 없이 직접 판정 열이 없는 기본 주문만 선택하면 로컬 예제 기준으로 분석합니다.</p>
         <button id="analyze-button" type="button">분석하기</button>

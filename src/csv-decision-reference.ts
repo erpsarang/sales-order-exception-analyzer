@@ -70,9 +70,8 @@ function readReferenceRows(
   const fields = new Set<string>();
   header.forEach((field, index) => {
     const location = `1번째 행 헤더 ${index + 1}번째 열`;
-    if (!requiredFields.includes(field)) {
-      throw referenceError(kind, location, `알 수 없는 필드 ${JSON.stringify(field)}입니다.`);
-    }
+    // 필수 열이 아닌 참고 열은 판정에 쓰지 않으므로 무시한다.
+    if (!requiredFields.includes(field)) return;
     if (fields.has(field)) throw referenceError(kind, location, `${field} 필드가 중복되었습니다.`);
     fields.add(field);
   });
