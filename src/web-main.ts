@@ -1,6 +1,6 @@
 import "./web-styles.css";
 import { analyzeOrderBatch, type StockAllocationResult } from "./batch-order-analysis.js";
-import { createExceptionCsv, createSupplyRiskCsv, preflightCsvUploadReferences, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
+import { allocationReasonLabels, createExceptionCsv, createSupplyRiskCsv, createSupplyRiskOrders, preflightCsvUploadReferences, supplyRiskExplanation, validateOrders, type CsvUploadResult, type MissingCsvReference } from "./order-csv.js";
 import { localDecisionContextProvider } from "./local-decision-reference.js";
 import { createCsvDecisionContextProvider } from "./csv-decision-reference.js";
 import { formatOrderSummary, type OrderSummaryDisplay } from "./order-summary.js";
@@ -164,33 +164,14 @@ supplyRiskDownloadButton.hidden = true;
 function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
   const allocations = batch.stockAllocations;
   const calculated = allocations.filter((allocation): allocation is Extract<StockAllocationResult, { status: "CALCULATED" }> => allocation.status === "CALCULATED");
-  const shortages = calculated.flatMap(allocation => allocation.items
-    .filter(item => item.shortageQuantity > 0)
-    .map(item => {
-      const orderDetails = batch.results[item.resultIndex]!.orderDetails;
-      const amount = orderDetails.estimatedAmount;
-      return {
-        ...item,
-        orderDetails,
-        estimatedAmount: typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : null,
-      };
-    }));
-  shortages.sort((left, right) => {
-    if (left.dueDate !== right.dueDate) return left.dueDate < right.dueDate ? -1 : 1;
-    if (left.estimatedAmount !== right.estimatedAmount) {
-      if (left.estimatedAmount === null) return 1;
-      if (right.estimatedAmount === null) return -1;
-      return right.estimatedAmount - left.estimatedAmount;
-    }
-    return left.resultIndex - right.resultIndex;
-  });
+  const shortages = createSupplyRiskOrders(batch);
   const unableCount = allocations.filter(allocation => allocation.status === "UNABLE_TO_CALCULATE").length;
   const heading = document.createElement("h2");
   heading.textContent = "공급 위험 (누적 재고 배분)";
   const count = document.createElement("p");
   count.textContent = `공급 위험: ${shortages.length}건`;
   const distinction = document.createElement("p");
-  distinction.textContent = "주문별 정상·예외 판정과 별개로, 같은 자재의 현재 재고를 납기순으로 누적 배분한 결과입니다.";
+  distinction.textContent = supplyRiskExplanation;
   supplyRiskDownloadButton.hidden = shortages.length === 0;
   supplyRiskSection.replaceChildren(heading, count, distinction);
   const first = shortages[0];
@@ -250,12 +231,6 @@ function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
   supplyRiskSection.append(supplyRiskDownloadButton);
   supplyRiskSection.hidden = false;
 }
-const allocationReasonLabels: Record<"INVALID_DUE_DATE" | "INVALID_QUANTITY" | "INVALID_AVAILABLE_QUANTITY" | "CONFLICTING_AVAILABLE_QUANTITY", string> = {
-  INVALID_DUE_DATE: "납기일이 없거나 올바르지 않음",
-  INVALID_QUANTITY: "주문 수량이 유효하지 않음",
-  INVALID_AVAILABLE_QUANTITY: "가용재고가 유효하지 않음",
-  CONFLICTING_AVAILABLE_QUANTITY: "같은 자재의 가용재고 값이 서로 다름",
-};
 function renderAllocations(allocations: StockAllocationResult[]): void {
   allocationSection.replaceChildren();
   const heading = document.createElement("h2");

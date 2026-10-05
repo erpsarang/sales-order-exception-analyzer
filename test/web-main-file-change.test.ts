@@ -7,6 +7,7 @@ import { preflightCsvUploadReferences } from "../src/order-csv.js";
 import { createCsvDecisionContextProvider } from "../src/csv-decision-reference.js";
 import { analyzeOrderBatch } from "../src/batch-order-analysis.js";
 import type { DecisionContextProvider } from "../src/decision-context.js";
+import { allocationReasonLabels, createSupplyRiskOrders, supplyRiskExplanation } from "../src/supply-risk-view.js";
 
 type UploadFile = { text(): Promise<string> };
 type Listener = () => unknown;
@@ -79,6 +80,7 @@ function setup(useRealCsv = false) {
     document: { body, querySelector: (selector: string) => body.querySelector(selector), createElement: (tag: string) => new Element(tag) },
     URL: { createObjectURL: (blob: Blob) => { downloads.push(blob); return "blob:test"; }, revokeObjectURL: () => {} },
     localDecisionContextProvider: {},
+    allocationReasonLabels, createSupplyRiskOrders, supplyRiskExplanation,
     createCsvDecisionContextProvider: (customer: string, material: string) => {
       references.push([customer, material]);
       return useRealCsv ? createCsvDecisionContextProvider(customer, material) : {};
@@ -418,6 +420,8 @@ test("공급 위험 주문만 납기·예상금액·입력 순서로 표시하�
   assert.ok(table);
   assert.equal(risk.hidden, false);
   assert.match(risk.textContent, /공급 위험: 5건/);
+  assert.ok(risk.textContent.includes(supplyRiskExplanation));
+  assert.ok(risk.textContent.includes("입고 예정 등 미래 공급은 반영하지 않습니다."));
   assert.match(risk.textContent, /첫 공급 위험 주문: SO-4 \(입력 행 번호 3\), 납기 2026-10-01, 부족량 2/);
   assert.match(risk.textContent, /배분 계산 불가 자재: 1건/);
   assert.equal(table.querySelector("caption")!.textContent, "공급 위험 주문");
