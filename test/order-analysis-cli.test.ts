@@ -119,7 +119,8 @@ test("10건 중 예외 4건의 요약은 batch summary와 일치하며 상세 �
       worklistLines.push(`상세: ${JSON.stringify(item.orderDetails)}`);
       for (const guide of item.exceptionGuides) worklistLines.push(`사유: ${guide.reasonCode} / 확인: ${guide.check} / 조치: ${guide.action}`);
     }
-    assert.deepEqual(lines.slice(5 + orders.length), worklistLines);
+    assert.deepEqual(lines.slice(5 + orders.length, 5 + orders.length + worklistLines.length), worklistLines);
+    assert.equal(lines[5 + orders.length + worklistLines.length], "공급 위험 (누적 재고 배분):");
     assert.deepEqual(await run([path]), result);
   });
 });
@@ -158,4 +159,87 @@ test("CSV 재분석은 반올림 요약과 기존 예외 CSV 내용을 동일하
     assert.deepEqual(await run([path, "--csv", output]), first);
     assert.equal(readFileSync(output, "utf8"), csv);
   }, "orders.csv");
+});
+
+function supplyRiskSection(stdout: string): string[] {
+  const lines = stdout.split("\n");
+  const start = lines.indexOf("공급 위험 (누적 재고 배분):");
+  assert.notEqual(start, -1);
+  return lines.slice(start);
+}
+
+test("이슈 예시: 같은 자재 두 주문이 재고를 넘으면 공급 위험 1건과 부족량을 출력한다", async () => {
+  const source = "orderId,customerId,materialId,orderQuantity,availableQuantity,customerBlocked,materialBlocked,estimatedAmount,dueDate\nSO-1,C-1,M-001,15,20,false,false,,2026-10-01\nSO-2,C-1,M-001,10,20,false,false,,2026-10-02\n";
+  await withFile(source, async (path) => {
+    const result = await run([path]);
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.split("\n");
+    assert.ok(lines.indexOf("공급 위험 (누적 재고 배분):") > lines.indexOf("예외 처리 순서 (입력 번호는 1부터 시작):"));
+    const section = supplyRiskSection(result.stdout);
+    assert.ok(section.includes("공급 위험: 1건"));
+    assert.ok(section.includes("첫 공급 위험 주문: SO-2 (입력 2), 납기 2026-10-02, 부족량 5"));
+    assert.ok(section.some((line) => line.startsWith('입력 2 / 주문 "SO-2" / 자재 M-001 / 거래처 C-1 / 납기 2026-10-02 / 주문수량 10 / 부족수량 5 / 예상금액')));
+  }, "orders.csv");
+});
+
+test("공급 위험이 없으면 공급 위험 0건을 출력한다", async () => {
+  await withFile(JSON.stringify([{ ...normal, dueDate: "2026-10-01" }]), async (path) => {
+    const result = await run([path]);
+    assert.equal(result.status, 0, result.stderr);
+    const section = supplyRiskSection(result.stdout);
+    assert.ok(section.includes("공급 위험: 0건"));
+    assert.equal(section.some((line) => line.startsWith("첫 공급 위험 주문")), false);
+  });
+});
+
+test("공급 위험 목록은 납기일, 예상금액 내림차순(없으면 뒤), 입력 순서로 정렬한다", async () => {
+  const due = "2026-10-02";
+  const orders = [
+    { ...normal, orderId: "A", orderQuantity: 10, availableQuantity: 10, dueDate: "2026-10-01" },
+    { ...normal, orderId: "B", orderQuantity: 5, availableQuantity: 10, dueDate: due, estimatedAmount: 100 },
+    { ...normal, orderId: "C", orderQuantity: 5, availableQuantity: 10, dueDate: due, estimatedAmount: 500 },
+    { ...normal, orderId: "D", orderQuantity: 5, availableQuantity: 10, dueDate: due },
+    { ...normal, orderId: "E", orderQuantity: 1, availableQuantity: 10, dueDate: "2026-10-03", estimatedAmount: 9999 },
+  ];
+  await withFile(JSON.stringify(orders), async (path) => {
+    const result = await run([path]);
+    assert.equal(result.status, 0, result.stderr);
+    const section = supplyRiskSection(result.stdout);
+    assert.ok(section.includes("공급 위험: 4건"));
+    const ids = section.filter((line) => /^입력 \d+ \/ 주문 /.test(line)).map((line) => /주문 "([^"]+)"/.exec(line)![1]);
+    assert.deepEqual(ids, ["C", "B", "D", "E"]);
+    assert.ok(section.includes("첫 공급 위험 주문: C (입력 3), 납기 2026-10-02, 부족량 5"));
+  });
+});
+
+test("일부 주문이 제외된 자재는 제외 주문을 안내하고 공급 위험 건수에 포함하지 않는다", async () => {
+  const orders = [
+    { ...normal, orderId: "A", orderQuantity: 15, availableQuantity: 20, dueDate: "2026-10-01" },
+    { ...normal, orderId: "B", orderQuantity: 5, availableQuantity: 20 },
+    { ...normal, orderId: "C", orderQuantity: 10, availableQuantity: 20, dueDate: "2026-10-02" },
+  ];
+  await withFile(JSON.stringify(orders), async (path) => {
+    const result = await run([path]);
+    assert.equal(result.status, 0, result.stderr);
+    const section = supplyRiskSection(result.stdout);
+    assert.ok(section.includes("공급 위험: 1건"));
+    assert.ok(section.some((line) => line.startsWith("일부 주문을 제외하고 계산한 자재: 1건")));
+    assert.ok(section.includes('제외 주문: 자재 M-1 / 입력 2 / 주문 "B" / 사유 납기일이 없거나 올바르지 않음'));
+  });
+});
+
+test("계산 불가 자재는 원인과 함께 안내하고 전체 판단 불가 문구를 출력한다", async () => {
+  const orders = [
+    { ...normal, orderId: "A", availableQuantity: 5, dueDate: "2026-10-01" },
+    { ...normal, orderId: "B", availableQuantity: 6, dueDate: "2026-10-02" },
+  ];
+  await withFile(JSON.stringify(orders), async (path) => {
+    const result = await run([path]);
+    assert.equal(result.status, 0, result.stderr);
+    const section = supplyRiskSection(result.stdout);
+    assert.ok(section.includes("공급 위험: 0건"));
+    assert.ok(section.some((line) => line.startsWith("배분 계산 불가 자재: 1건")));
+    assert.ok(section.some((line) => line.trim() === "M-1: 같은 자재의 가용재고 값이 서로 다름"));
+    assert.ok(section.includes("계산 가능한 자재가 없어 전체 공급 위험 여부를 판단할 수 없습니다."));
+  });
 });
