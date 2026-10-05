@@ -1,6 +1,10 @@
 import { analyzeOrderBatch } from "./batch-order-analysis.js";
 import type { OrderInput } from "./order-analysis.js";
 import { enrichOrder, type BusinessOrder, type DecisionContextProvider } from "./decision-context.js";
+import { createSupplyRiskOrders } from "./supply-risk-view.js";
+
+// 화면(web-main)이 이 모듈 하나로 공급 위험 공유 규칙을 가져다 쓸 수 있게 다시 내보낸다.
+export { allocationReasonLabels, createSupplyRiskOrders, supplyRiskExplanation } from "./supply-risk-view.js";
 
 const requiredStringFields = ["orderId", "customerId", "materialId"] as const;
 const requiredNumberFields = ["orderQuantity", "availableQuantity"] as const;
@@ -208,31 +212,7 @@ export function createExceptionCsv(orders: OrderInput[], batch: ReturnType<typeo
 
 export function createSupplyRiskCsv(batch: ReturnType<typeof analyzeOrderBatch>): string {
   const header = ["주문번호", "자재", "거래처", "납기일", "주문수량", "부족수량", "예상금액"];
-  const shortages = batch.stockAllocations.flatMap((allocation) =>
-    allocation.status === "CALCULATED"
-      ? allocation.items
-        .filter((item) => item.shortageQuantity > 0)
-        .map((item) => {
-          const orderDetails = batch.results[item.resultIndex]!.orderDetails;
-          const amount = orderDetails.estimatedAmount;
-          return {
-            item,
-            orderDetails,
-            estimatedAmount: typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : null,
-          };
-        })
-      : [],
-  );
-  shortages.sort((left, right) => {
-    if (left.item.dueDate !== right.item.dueDate) return left.item.dueDate < right.item.dueDate ? -1 : 1;
-    if (left.estimatedAmount !== right.estimatedAmount) {
-      if (left.estimatedAmount === null) return 1;
-      if (right.estimatedAmount === null) return -1;
-      return right.estimatedAmount - left.estimatedAmount;
-    }
-    return left.item.resultIndex - right.item.resultIndex;
-  });
-  const rows = shortages.map(({ item, orderDetails, estimatedAmount }) =>
-    [item.orderId, item.materialId, orderDetails.customerId, item.dueDate, orderDetails.orderQuantity, item.shortageQuantity, estimatedAmount ?? undefined].map(escapeCsvCell).join(","));
+  const rows = createSupplyRiskOrders(batch).map((item) =>
+    [item.orderId, item.materialId, item.orderDetails.customerId, item.dueDate, item.orderDetails.orderQuantity, item.shortageQuantity, item.estimatedAmount ?? undefined].map(escapeCsvCell).join(","));
   return `\uFEFF${[header.map(escapeCsvCell).join(","), ...rows].join("\n")}\n`;
 }
