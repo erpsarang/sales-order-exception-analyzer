@@ -4,7 +4,7 @@ This repository is bootstrapped with AI Development Framework MVP v0.2 canonical
 
 - Source repository: `erpsarang/self-improvement-mvp`
 - Framework line: `v0.2`
-- Framework source SHA: `56a2321aca5b84ede16af260c84ecc52b4ab7e7a`
+- Framework source SHA: `f3b078edddf9a6484589f1ec4dfe7d12ba58f1ad`
 - Canonical path: User Requirement → Read-only AI PLAN → Human `PLAN-승인` → PLAN_AUTHORIZE → ImplementContract + Context Pack → bounded untrusted Worker → exact-base deterministic CI → bounded pre-Bridge repair (max 2) if required → PASS candidate only → PLAN Bridge → SEAL → PUBLISH → VERIFY → Semantic REVIEW → bounded LOCAL_FIX if required → MERGE_READY → Human Merge → Trusted LEARN Source → Read-only AI LEARN → Trusted Improvement Candidate → Human decision.
 - PLAN contract: `questions` contains blocking questions only; `implementationScope.ready=true` requires `questions=[]`; any blocking question requires `ready=false` with an empty implementation scope.
 - PLAN model: one subscription executor call per PLAN, `sonnet` with effort medium by default. Only a human-written requirement whose body checks `- [x] 복잡한 요구입니다` (Issue template) uses `opus`; bodies not written by a human, such as Product Discovery candidates, never escalate. The chosen model is bound into the PLAN_REQUEST/RESULT marker.
@@ -14,6 +14,7 @@ This repository is bootstrapped with AI Development Framework MVP v0.2 canonical
 - Pre-Bridge repair: initial Worker and repair attempts run in separate fresh jobs, with bounded state transfer through artifacts and at most two repair attempts.
 - PLAN bridge recovery: a completed bounded Worker candidate may be explicitly reselected and revalidated by the current trusted control-plane without rerunning the Worker; source identity, exact artifact, Handoff, exact base, deterministic CI, and provenance are all revalidated fail-closed before Trusted Rail dispatch.
 - Trust model: IMPLEMENT/FIX workers are untrusted; worker output is a candidate artifact.
+- IMPLEMENT context: the trusted Context Pack keeps the full source of the scope up to 384KB and output is validated against it. The Worker prompt inlines at most 96KB; larger files become `/work` read references and the prompt's first line carries `IMPLEMENT_READ_TOOLS required`, which the executor rejects before calling Claude unless its isolated read tools are on.
 - Trusted Rail: exact-SHA/provenance validation is preserved.
 - Requirement completion: Semantic REVIEW distinguishes current slice `PASS` from parent requirement `requirementComplete`; a partial slice may merge but must not close the parent requirement. Follow-up scope that the Issue body explicitly places outside this Issue (a separate requirement) is not a remaining requirement, so it alone does not make `requirementComplete=false`.
 - Incomplete requirement continuation: after Human Merge, trusted orchestration provenance with `requirementComplete=false` dispatches the next read-only PLAN for the same open requirement exactly once; Human `PLAN-승인` remains required before IMPLEMENT.
