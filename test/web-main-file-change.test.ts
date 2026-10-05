@@ -39,6 +39,9 @@ class Element {
     }
     return null;
   }
+  querySelectorAll(tag: string): Element[] {
+    return this.children.flatMap(child => [...(child.tag === tag ? [child] : []), ...child.querySelectorAll(tag)]);
+  }
   closest(): null { return null; }
   insertAdjacentElement(position: string, element: Element): void {
     assert.ok(this.parent);
@@ -381,6 +384,9 @@ test("실제 배치 결과의 납기순 배분과 첫 부족 주문을 표시하
   assert.match(risk.textContent, /첫 공급 위험 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
   assert.match(section.textContent, /주문별 예외 판정.*따로 비교/);
   assert.match(section.textContent, /첫 부족 주문: SO-3 \(입력 행 번호 1\), 납기 2026-10-03, 부족량 20/);
+  assert.doesNotMatch(section.textContent, /일부 주문 제외/);
+  assert.doesNotMatch(risk.textContent, /일부 주문을 제외하고 계산한 자재/);
+  assert.equal(section.querySelectorAll("table").length, 1);
   const table = section.querySelector("table")!;
   assert.deepEqual(table.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "납기일", "배분 가능 수량", "배분량", "처리 후 잔량", "부족량"]);
   assert.deepEqual(table.querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent)), [
@@ -489,6 +495,42 @@ test("일부 주문만 납기일이 없으면 그 자재는 계산 불가가 아
   assert.match(risk.textContent, /공급 위험: 1건/);
   assert.doesNotMatch(risk.textContent, /배분 계산 불가 자재/);
   assert.equal(risk.querySelector("ul"), null);
+});
+
+test("일부 주문만 제외된 자재는 제외 주문을 입력 행 번호·주문번호·사유와 함께 표시한다", async () => {
+  const ui = setup(true);
+  await ui.select(file([
+    "orderId,customerId,materialId,orderQuantity,dueDate",
+    "SO-1,C-1,M-1,30,2026-10-01",
+    "SO-2,C-1,M-1,50,",
+    "SO-3,C-1,M-1,0,2026-10-02",
+    "SO-4,C-1,M-1,0,2026/10/03",
+    "SO-5,C-1,M-2,5,2026-10-01",
+  ].join("\n")));
+  await ui.select(file(customers), "customer-file");
+  await ui.select(file("materialId,materialBlocked,availableQuantity\nM-1,false,20\nM-2,false,10"), "material-file");
+  await ui.analyze();
+  const risk = ui.node("supply-risk-summary");
+  assert.match(risk.textContent, /공급 위험: 1건/);
+  assert.match(risk.textContent, /일부 주문을 제외하고 계산한 자재: 1건\. 제외된 주문은 공급 위험 건수에 포함되지 않습니다/);
+  assert.doesNotMatch(risk.textContent, /배분 계산 불가 자재/);
+  assert.equal(risk.querySelector("ul"), null);
+  const section = ui.node("stock-allocations");
+  assert.match(section.textContent, /자재 M-1.*일부 주문 제외: 3건은 배분에서 뺐습니다\. 납기일과 수량을 보완한 뒤 다시 분석하세요\./);
+  const tables = section.querySelectorAll("table");
+  assert.equal(tables.length, 3);
+  // 배분 표에는 유효 주문만, 제외 표는 그 자재의 배분 표 바로 뒤에 온다.
+  assert.deepEqual(tables[0]!.querySelector("tbody")!.children.map(row => row.children[1]!.textContent), ["SO-1"]);
+  assert.equal(tables[1]!.querySelector("caption")!.textContent, "자재 M-1 배분에서 제외한 주문");
+  assert.deepEqual(tables[1]!.querySelector("thead")!.children[0]!.children.map(cell => cell.textContent), ["입력 행 번호", "주문번호", "제외 사유"]);
+  assert.deepEqual(tables[1]!.querySelector("tbody")!.children.map(row => row.children.map(cell => cell.textContent)), [
+    ["2", "SO-2", "납기일이 없거나 올바르지 않음"],
+    ["3", "SO-3", "주문 수량이 유효하지 않음"],
+    ["4", "SO-4", "납기일이 없거나 올바르지 않음, 주문 수량이 유효하지 않음"],
+  ]);
+  assert.equal(tables[2]!.querySelector("caption")!.textContent, "자재 M-2 납기순 재고 배분");
+  await ui.select(file("orderId,customerId,materialId,orderQuantity,dueDate\nSO-1,C-1,M-1,30,2026-10-01"));
+  assertCleared(ui);
 });
 
 test("배분 계산 불가 자재는 공급 위험 건수에서 제외하고 한계를 표시한다", async () => {
