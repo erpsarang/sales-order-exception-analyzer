@@ -221,6 +221,12 @@ function renderSupplyRisk(batch: ReturnType<typeof analyzeOrderBatch>): void {
     table.append(caption, head, body);
     supplyRiskSection.append(table);
   }
+  const partialCount = calculated.filter(allocation => allocation.excludedOrders).length;
+  if (partialCount > 0) {
+    const partial = document.createElement("p");
+    partial.textContent = `일부 주문을 제외하고 계산한 자재: ${partialCount}건. 제외된 주문은 공급 위험 건수에 포함되지 않습니다. 자재별 재고 배분에서 제외된 주문을 확인하세요.`;
+    supplyRiskSection.append(partial);
+  }
   if (unableCount > 0) {
     const unable = document.createElement("p");
     unable.textContent = `배분 계산 불가 자재: ${unableCount}건. 공급 위험 건수는 계산 가능한 자재의 주문만 포함합니다.`;
@@ -301,8 +307,33 @@ function renderAllocations(allocations: StockAllocationResult[]): void {
     }
     table.append(caption, head, body);
     allocationSection.append(table);
+    if (allocation.excludedOrders) renderExcludedOrders(allocation.materialId, allocation.excludedOrders);
   }
   allocationSection.hidden = false;
+}
+function renderExcludedOrders(materialId: string, excludedOrders: NonNullable<Extract<StockAllocationResult, { status: "CALCULATED" }>["excludedOrders"]>): void {
+  const notice = document.createElement("p");
+  notice.textContent = `일부 주문 제외: ${excludedOrders.length}건은 배분에서 뺐습니다. 납기일과 수량을 보완한 뒤 다시 분석하세요.`;
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = `자재 ${materialId} 배분에서 제외한 주문`;
+  const head = document.createElement("thead");
+  const row = document.createElement("tr");
+  for (const label of ["입력 행 번호", "주문번호", "제외 사유"]) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = label;
+    row.append(header);
+  }
+  head.append(row);
+  const body = document.createElement("tbody");
+  for (const excluded of excludedOrders) {
+    const excludedRow = document.createElement("tr");
+    excludedRow.append(cell(excluded.resultIndex + 1), cell(excluded.orderId), cell(excluded.reasons.map(reason => allocationReasonLabels[reason]).join(", ")));
+    body.append(excludedRow);
+  }
+  table.append(caption, head, body);
+  allocationSection.append(notice, table);
 }
 function clearReference(): void {
   referenceSection.hidden = true;
